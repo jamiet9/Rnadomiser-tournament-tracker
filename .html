@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Minecraft Bingo Lockout — Card Viewer</title>
+  <style>
+    :root{--bg:#f6fbff;--card-bg:#fff;--accent:#2d6cdf}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial; background:var(--bg); color:#202124; margin:0; padding:24px;}
+    .container{max-width:1100px;margin:0 auto}
+    h1{margin:0 0 8px;font-size:20px}
+    .stage{background:var(--card-bg);padding:18px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.06);margin-bottom:18px}
+    label{display:block;margin:8px 0 6px;font-weight:600}
+    input[type=text], textarea{width:100%;box-sizing:border-box;padding:10px;border:1px solid #d1d7e0;border-radius:6px;font-size:14px}
+    textarea{height:160px; font-family:monospace; white-space:pre-wrap}
+    .row{display:flex;gap:12px}
+    .leftcol{width:150px}
+    .center{flex:1}
+    .btn{display:inline-block;padding:8px 12px;border-radius:6px;border:0;background:var(--accent);color:#fff;cursor:pointer}
+    .grid-wrap{display:flex;align-items:center;gap:12px}
+    .score-box{width:150px;background:#fff;padding:8px;border-radius:8px;border:1px solid #e6eefc;text-align:center}
+    .score-box h3{margin:6px 0;font-size:16px}
+    .team-name{font-weight:700}
+    .grid{position:relative;display:grid;background:#f8fbff;border:1px solid #cbd9ff;padding:6px;border-radius:6px}
+    .cell{box-sizing:border-box;border:1px solid rgba(0,0,0,.06);padding:6px;min-width:48px;min-height:48px;display:flex;flex-direction:column;justify-content:space-between;align-items:center;font-size:12px;position:relative}
+    .cell .item{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+    .cell .rarity{font-size:11px;opacity:.9}
+    .cell .points{font-size:11px;opacity:.95}
+    .overlayMark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:44px;pointer-events:none;opacity:0.5}
+    .overlayMark.x{color:rgba(222,36,36,0.7)}
+    .overlayMark.o{color:rgba(42,142,42,0.7)}
+    .lineOverlay{position:absolute;pointer-events:none}
+    /* rarity colours */
+    .very-common{background:linear-gradient(#fff7d9,#ffe89c)}
+    .common{background:linear-gradient(#ffffff,#f5f5f7)}
+    .uncommon{background:linear-gradient(#e6ffdc,#b7f08a)}
+    .rare{background:linear-gradient(#d9f0ff,#7ecaff)}
+    .super-rare{background:linear-gradient(#f0dbff,#b98aff)}
+
+    .legend{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+    .legend .key{padding:8px;border-radius:6px;font-weight:700;display:flex;gap:8px;align-items:center}
+    .muted{color:#666;font-size:13px}
+    .small{font-size:12px}
+    .meta{margin-top:12px;color:#444}
+    .credits{margin-top:6px;color:#666;font-size:13px}
+
+    @media (max-width:900px){.row{flex-direction:column}.leftcol{width:auto}.grid-wrap{flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Minecraft Bingo Lockout — Card Viewer</h1>
+    <div class="stage" id="step1">
+      <div class="small muted">Step 1 — Enter team names</div>
+      <label>Team X name</label>
+      <input id="teamXName" type="text" placeholder="Team X" value="Team X" />
+      <label>Team O name</label>
+      <input id="teamOName" type="text" placeholder="Team O" value="Team O" />
+      <div style="margin-top:12px;text-align:right">
+        <button class="btn" id="toStep2">Next</button>
+      </div>
+    </div>
+
+    <div class="stage" id="step2" style="display:none">
+      <div class="small muted">Step 2 — Paste the card text here (items + rarities). The parser accepts formats like "ITEM\tRarity" per cell or alternating lines. See example in the box.</div>
+      <label>Paste card</label>
+      <textarea id="cardInput" placeholder="PASTE CARD TEXT"></textarea>
+      <div style="margin-top:8px;text-align:right">
+        <button class="btn" id="parseBtn">Done</button>
+      </div>
+    </div>
+
+    <div class="stage" id="viewer" style="display:none">
+      <div class="row" style="align-items:center;margin-bottom:8px">
+        <div class="leftcol score-box" id="scoreLeft">
+          <h3 id="teamXDisplay">Team X</h3>
+          <div style="font-size:30px;font-weight:800;color:#c33" id="scoreX">0</div>
+        </div>
+
+        <div class="center">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div class="muted">Click a cell to cycle: X → O → none</div>
+            <div>
+              <button class="btn" id="resetMarks">Reset marks</button>
+              <button class="btn" id="exportBtn" style="margin-left:6px;background:#27ae60">Export card text</button>
+            </div>
+          </div>
+
+          <div class="grid-wrap">
+            <div id="gridContainer" style="flex:1;min-width:200px"></div>
+          </div>
+
+        </div>
+
+        <div class="leftcol score-box" id="scoreRight">
+          <h3 id="teamODisplay">Team O</h3>
+          <div style="font-size:30px;font-weight:800;color:#2a8f2a" id="scoreO">0</div>
+        </div>
+      </div>
+
+      <div class="legend" id="legend"></div>
+      <div class="meta">Card size: <span id="cardSize"></span> — Points: Very Common=1, Common=2, Uncommon=4, Rare=8, Super Rare=16. Lines double points for the team that completes them (doubling stacks if a cell is part of multiple completed lines).</div>
+      <div class="credits">Tip: Paste a previously exported card to recreate it. Then click cells to mark them for teams.</div>
+    </div>
+
+  </div>
+
+<script>
+// rarity mapping
+const RARITIES = {
+  'very common': {key:'Very Common',pts:1,cls:'very-common'},
+  'common': {key:'Common',pts:2,cls:'common'},
+  'uncommon': {key:'Uncommon',pts:4,cls:'uncommon'},
+  'rare': {key:'Rare',pts:8,cls:'rare'},
+  'super rare': {key:'Super Rare',pts:16,cls:'super-rare'}
+};
+
+const teamColors = {X:'#dd4444', O:'#2aa02a'};
+
+let grid = []; // 2D array of cells {item, rarityKey, basePts, mark:null|'X'|'O'}
+let N = 0;
+let lines = {X:[], O:[]};
+
+function normalizeRarity(s){ if(!s) return null; s = s.trim().toLowerCase(); if(RARITIES[s]) return s; // try to match 'very common' variations
+  if(s.includes('very') && s.includes('common')) return 'very common';
+  if(s.includes('super') && s.includes('rare')) return 'super rare';
+  if(s.includes('uncommon')) return 'uncommon';
+  if(s.includes('rare')) return 'rare';
+  if(s.includes('common')) return 'common';
+  return null;
+}
+
+function parseCardText(text){
+  // Extract tokens: uppercase items (with underscores/digits) and rarity phrases from the raw text
+  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
+  const items = [];
+  let i = 0;
+  while(i < lines.length){
+    const line = lines[i];
+    // if line contains a tab or multiple whitespace, split into parts
+    const parts = line.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
+    if(parts.length >= 2){
+      // assume interleaved: ITEM RARITY ITEM RARITY ... in this line
+      for(let j=0;j<parts.length;j+=2){
+        const it = parts[j];
+        const ra = parts[j+1] || '';
+        items.push({item:it, rarityRaw:ra});
+      }
+      i++;
+      continue;
+    }
+    // otherwise if single token, could be ITEM then next line rarity
+    const single = parts[0];
+    // check if single looks like a rarity
+    const maybeR = normalizeRarity(single);
+    if(maybeR){
+      // This is a rarity without preceding item? Try attach to previous if exists
+      if(items.length>0 && !items[items.length-1].rarityRaw){ items[items.length-1].rarityRaw = single; }
+      i++;
+      continue;
+    }
+    // treat as item; look ahead for next line as rarity if exists
+    let next = lines[i+1] || '';
+    let nextParts = next.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
+    if(nextParts.length>0){
+      const maybe = normalizeRarity(nextParts[0]);
+      if(maybe){ items.push({item:single, rarityRaw:nextParts[0]}); i+=2; continue; }
+    }
+    // fallback: push item with empty rarity
+    items.push({item:single, rarityRaw:''}); i++;
+  }
+
+  // if items length isn't a perfect square, try other heuristics: maybe the input used alternating tokens separated by tabs in a single long line
+  if(!Number.isInteger(Math.sqrt(items.length))){
+    // try a different tokenization: find all uppercase-like tokens and rarity phrases
+    const tokens = text.split(/\s+/).filter(Boolean);
+    const list = [];
+    for(let k=0;k<tokens.length;){
+      const t = tokens[k];
+      // if token looks like ITEM (uppercase, underscores) and next token(s) form rarity
+      const maybeR = normalizeRarity(tokens[k+1]||'');
+      if(maybeR){ list.push({item:t,rarityRaw:tokens[k+1]}); k+=2; }
+      else { // try combine until we find a rarity
+        let j=k+1; let found=null;
+        while(j < tokens.length){ if(normalizeRarity(tokens[j])){ found=tokens[j]; break;} j++; }
+        if(found){ list.push({item:t,rarityRaw:found}); k = j+1; } else { list.push({item:t,rarityRaw:''}); k++; }
+      }
+    }
+    if(Number.isInteger(Math.sqrt(list.length))){ return list.map(x=>({item:x.item, rarity:normalizeRarity(x.rarityRaw)||'common'})); }
+  }
+
+  // finalize array to expected format
+  const final = items.map(x=>({item:x.item, rarity:normalizeRarity(x.rarityRaw)||'common'}));
+  return final;
+}
+
+function buildGridFromPairs(pairs){
+  const count = pairs.length;
+  const size = Math.sqrt(count);
+  if(!Number.isInteger(size) || size < 1 || size > 10) return null;
+  N = size;
+  grid = [];
+  for(let r=0;r<N;r++){
+    const row = [];
+    for(let c=0;c<N;c++){
+      const p = pairs[r*N + c];
+      const rar = (p && p.rarity) ? p.rarity : 'common';
+      const meta = RARITIES[rar] || RARITIES['common'];
+      row.push({item:(p && p.item) ? p.item : '', rarityKey:rar, basePts:meta.pts, mark:null});
+    }
+    grid.push(row);
+  }
+  return grid;
+}
+
+function renderGrid(){
+  const container = document.getElementById('gridContainer');
+  container.innerHTML = '';
+  const gridEl = document.createElement('div');
+  gridEl.className = 'grid';
+  gridEl.style.gridTemplateColumns = `repeat(${N}, minmax(80px,1fr))`;
+  gridEl.style.width = Math.min(700, N*100) + 'px';
+
+  // draw cells
+  for(let r=0;r<N;r++){
+    for(let c=0;c<N;c++){
+      const cell = grid[r][c];
+      const cellEl = document.createElement('div');
+      cellEl.className = 'cell '+RARITIES[cell.rarityKey].cls;
+      cellEl.dataset.r = r; cellEl.dataset.c = c;
+
+      const itemEl = document.createElement('div'); itemEl.className='item'; itemEl.textContent = cell.item;
+      const rarityEl = document.createElement('div'); rarityEl.className='rarity'; rarityEl.textContent = RARITIES[cell.rarityKey].key;
+      const pointsEl = document.createElement('div'); pointsEl.className='points'; pointsEl.textContent = cell.basePts + ' pts';
+
+      cellEl.appendChild(itemEl); cellEl.appendChild(rarityEl); cellEl.appendChild(pointsEl);
+
+      const mark = document.createElement('div'); mark.className='overlayMark'; cellEl.appendChild(mark);
+
+      cellEl.addEventListener('click', ()=>{
+        cycleMark(r,c); renderEverything();
+      });
+
+      gridEl.appendChild(cellEl);
+    }
+  }
+  container.appendChild(gridEl);
+
+  // container for line overlays
+  const overlayRoot = document.createElement('div'); overlayRoot.style.position='relative'; overlayRoot.style.width='100%'; overlayRoot.style.marginTop='6px';
+  container.appendChild(overlayRoot);
+}
+
+function cycleMark(r,c){
+  const cur = grid[r][c].mark;
+  if(cur === null) grid[r][c].mark = 'X';
+  else if(cur === 'X') grid[r][c].mark = 'O';
+  else grid[r][c].mark = null;
+}
+
+function getLinesForTeam(team){
+  const res = [];
+  // rows
+  for(let r=0;r<N;r++){
+    let ok = true; for(let c=0;c<N;c++){ if(grid[r][c].mark !== team) { ok = false; break; } }
+    if(ok) res.push({type:'row',i:r});
+  }
+  // cols
+  for(let c=0;c<N;c++){
+    let ok = true; for(let r=0;r<N;r++){ if(grid[r][c].mark !== team){ ok = false; break; } }
+    if(ok) res.push({type:'col',i:c});
+  }
+  // diag TL-BR
+  let ok = true; for(let i=0;i<N;i++){ if(grid[i][i].mark !== team){ ok=false; break; } }
+  if(ok) res.push({type:'diag','which':0});
+  // diag TR-BL
+  ok = true; for(let i=0;i<N;i++){ if(grid[i][N-1-i].mark !== team){ ok=false; break; } }
+  if(ok) res.push({type:'diag','which':1});
+  return res;
+}
+
+function renderEverything(){
+  // update marks overlay on cells
+  const gridEl = document.querySelector('.grid'); if(!gridEl) return;
+  const cells = gridEl.querySelectorAll('.cell');
+  cells.forEach(cellEl=>{
+    const r = parseInt(cellEl.dataset.r), c = parseInt(cellEl.dataset.c);
+    const mEl = cellEl.querySelector('.overlayMark');
+    const mark = grid[r][c].mark;
+    mEl.className = 'overlayMark';
+    if(mark === 'X'){ mEl.classList.add('x'); mEl.textContent = 'X'; }
+    else if(mark === 'O'){ mEl.classList.add('o'); mEl.textContent = 'O'; }
+    else { mEl.textContent = ''; }
+    // update points text with multiplier later
+  });
+
+  // compute lines
+  lines.X = getLinesForTeam('X'); lines.O = getLinesForTeam('O');
+
+  // remove existing line overlays
+  const container = document.getElementById('gridContainer');
+  // remove any existing .lineOverlay elements
+  container.querySelectorAll('.lineOverlay').forEach(n=>n.remove());
+
+  // prepare multiplier map per team per cell
+  const mult = {};
+  for(let r=0;r<N;r++) for(let c=0;c<N;c++){ mult[`${r},${c}`] = {X:0,O:0}; }
+  // for each line of team, increment cells
+  ['X','O'].forEach(team=>{
+    (lines[team]||[]).forEach(ln=>{
+      if(ln.type === 'row'){
+        const r = ln.i; for(let c=0;c<N;c++) mult[`${r},${c}`][team]++;
+        drawLineOverlay('row', r, team);
+      } else if(ln.type === 'col'){
+        const c = ln.i; for(let r=0;r<N;r++) mult[`${r},${c}`][team]++;
+        drawLineOverlay('col', ln.i, team);
+      } else if(ln.type === 'diag'){
+        if(ln.which === 0){ for(let i=0;i<N;i++) mult[`${i},${i}`][team]++; drawLineOverlay('diag0',0,team);} 
+        else { for(let i=0;i<N;i++) mult[`${i},${N-1-i}`][team]++; drawLineOverlay('diag1',0,team);} 
+      }
+    });
+  });
+
+  // compute scores
+  let scoreX = 0, scoreO = 0;
+  for(let r=0;r<N;r++){
+    for(let c=0;c<N;c++){
+      const cell = grid[r][c];
+      const key = `${r},${c}`;
+      const mark = cell.mark;
+      if(mark === 'X'){
+        const multiplier = Math.pow(2, mult[key].X);
+        scoreX += cell.basePts * multiplier;
+      } else if(mark === 'O'){
+        const multiplier = Math.pow(2, mult[key].O);
+        scoreO += cell.basePts * multiplier;
+      }
+      // update cell points display
+      const cellIndex = r*N + c;
+      const cellEl = gridEl.children[cellIndex];
+      const ptsEl = cellEl.querySelector('.points');
+      let effective = cell.basePts;
+      if(mark === 'X' && mult[key].X>0) effective = cell.basePts * Math.pow(2, mult[key].X);
+      if(mark === 'O' && mult[key].O>0) effective = cell.basePts * Math.pow(2, mult[key].O);
+      ptsEl.textContent = effective + ' pts';
+    }
+  }
+
+  document.getElementById('scoreX').textContent = scoreX;
+  document.getElementById('scoreO').textContent = scoreO;
+}
+
+function drawLineOverlay(type,index,team){
+  const container = document.getElementById('gridContainer');
+  const gridEl = container.querySelector('.grid');
+  const overlay = document.createElement('div'); overlay.className='lineOverlay';
+  const rect = gridEl.getBoundingClientRect();
+  // We'll position overlay relative to gridEl using absolute positioning inside container
+  const cellEl = gridEl.querySelector('.cell');
+  if(!cellEl) return;
+  const cellRect = cellEl.getBoundingClientRect();
+  // compute sizes
+  const cellW = cellRect.width, cellH = cellRect.height;
+  overlay.style.position = 'absolute';
+  overlay.style.pointerEvents = 'none';
+  const color = team==='X' ? 'rgba(221,68,68,0.28)' : 'rgba(42,142,42,0.28)';
+  if(type === 'row'){
+    const top = 6 + index*(cellH) ; // grid padding 6
+    overlay.style.left = (6) + 'px';
+    overlay.style.top = (top) + 'px';
+    overlay.style.width = (cellW*N) + 'px';
+    overlay.style.height = cellH + 'px';
+    overlay.style.background = color;
+    overlay.style.borderRadius = '6px';
+  } else if(type === 'col'){
+    const left = 6 + index*(cellW);
+    overlay.style.left = left + 'px';
+    overlay.style.top = 6 + 'px';
+    overlay.style.width = cellW + 'px';
+    overlay.style.height = (cellH*N) + 'px';
+    overlay.style.background = color;
+    overlay.style.borderRadius = '6px';
+  } else if(type === 'diag0' || type === 'diag1'){
+    // use an SVG diagonal line
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('width',(cellW*N)+'' ); svg.setAttribute('height',(cellH*N)+'' );
+    svg.style.position='absolute'; svg.style.left=6+'px'; svg.style.top=6+'px'; svg.style.pointerEvents='none';
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    if(type==='diag0'){
+      line.setAttribute('x1', cellW*0 + cellW/2); line.setAttribute('y1', cellH*0 + cellH/2);
+      line.setAttribute('x2', cellW*(N-1) + cellW/2); line.setAttribute('y2', cellH*(N-1) + cellH/2);
+    } else {
+      line.setAttribute('x1', cellW*(N-1) + cellW/2); line.setAttribute('y1', cellH*0 + cellH/2);
+      line.setAttribute('x2', cellW*0 + cellW/2); line.setAttribute('y2', cellH*(N-1) + cellH/2);
+    }
+    line.setAttribute('stroke', team==='X' ? 'rgba(221,68,68,0.35)' : 'rgba(42,142,42,0.35)');
+    line.setAttribute('stroke-width', Math.max(10, Math.min(36, Math.min(cellW,cellH) * 0.6)));
+    line.setAttribute('stroke-linecap','round');
+    svg.appendChild(line);
+    container.appendChild(svg);
+    return;
+  }
+  container.appendChild(overlay);
+}
+
+// UI wiring
+document.getElementById('toStep2').addEventListener('click', ()=>{
+  document.getElementById('step1').style.display='none';
+  document.getElementById('step2').style.display='block';
+});
+
+document.getElementById('parseBtn').addEventListener('click', ()=>{
+  const teamX = document.getElementById('teamXName').value || 'Team X';
+  const teamO = document.getElementById('teamOName').value || 'Team O';
+  document.getElementById('teamXDisplay').textContent = teamX;
+  document.getElementById('teamODisplay').textContent = teamO;
+  const text = document.getElementById('cardInput').value.trim();
+  if(!text){ alert('Please paste card text.'); return; }
+  const pairs = parseCardText(text);
+  const built = buildGridFromPairs(pairs);
+  if(!built){ alert('Could not parse a square card from the text. Make sure there are between 1 and 100 cells and the total is a perfect square (1x1, 2x2 ... 10x10).'); return; }
+  document.getElementById('cardSize').textContent = N+' x '+N;
+
+  // render legend
+  const legend = document.getElementById('legend'); legend.innerHTML='';
+  for(const key of ['very common','common','uncommon','rare','super rare']){
+    const l = document.createElement('div'); l.className='key '+RARITIES[key].cls; l.style.padding='8px';
+    l.textContent = RARITIES[key].key + ' — ' + RARITIES[key].pts + ' pts'; legend.appendChild(l);
+  }
+
+  document.getElementById('step2').style.display='none';
+  document.getElementById('viewer').style.display='block';
+  renderGrid();
+  renderEverything();
+});
+
+// reset marks
+document.getElementById('resetMarks').addEventListener('click', ()=>{ for(let r=0;r<N;r++) for(let c=0;c<N;c++) grid[r][c].mark = null; renderEverything(); });
+
+// export card text
+document.getElementById('exportBtn').addEventListener('click', ()=>{
+  // export lines like ITEM\nRARITY\tITEM\nRARITY ... preserve simple alternating format
+  let out = '';
+  const flat = [];
+  for(let r=0;r<N;r++) for(let c=0;c<N;c++){ const cell = grid[r][c]; flat.push(cell.item + '\n' + RARITIES[cell.rarityKey].key); }
+  out = flat.join('\n');
+  // show in prompt to copy
+  prompt('Copy the card text below (paste back into the importer to recreate the card):', out);
+});
+
+</script>
+</body>
+</html>
