@@ -12,7 +12,7 @@ h1{margin:0 0 8px;font-size:18px}
 .stage{background:var(--card-bg);padding:14px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.06);margin-bottom:18px}
 label{display:block;margin:8px 0 6px;font-weight:600}
 input[type=text], textarea{width:100%;box-sizing:border-box;padding:8px;border:1px solid #d1d7e0;border-radius:6px;font-size:13px}
-textarea{height:120px;font-family:monospace;white-space:pre-wrap}
+textarea{height:140px;font-family:monospace;white-space:pre-wrap}
 .row{display:flex;gap:12px}
 .leftcol{width:150px}
 .center{flex:1}
@@ -61,9 +61,9 @@ textarea{height:120px;font-family:monospace;white-space:pre-wrap}
   </div>
 
   <div class="stage" id="step2" style="display:none">
-    <div class="small muted">Step 2 — Paste card text (ITEM then RARITY, or ITEM<TAB>RARITY, or RARITY<TAB>ITEM). Underscores → spaces automatically.</div>
+    <div class="small muted">Step 2 — Paste card text here. Supports ITEM [tab] RARITY, RARITY [tab] ITEM, or ITEM then next-line RARITY. Underscores → spaces automatically.</div>
     <label>Paste card</label>
-    <textarea id="cardInput" placeholder="PASTE CARD TEXT"></textarea>
+    <textarea id="cardInput" placeholder="PASTE CARD TEXT (ITEM then RARITY etc)"></textarea>
     <div style="margin-top:8px;text-align:right">
       <button class="btn" id="parseBtn">Done</button>
     </div>
@@ -115,7 +115,6 @@ const RARITY_RANK = {'super rare':5,'very common':4,'rare':3,'uncommon':2,'commo
 
 let grid = [], N = 0, lines = {X:[],O:[]}, prevLines = {X:[],O:[]};
 
-// normalizer
 function normalizeRarity(s){
   if(!s) return null;
   s = String(s).trim().toLowerCase().replace(/_/g,' ').replace(/\s+/g,' ').trim();
@@ -133,81 +132,104 @@ function normalizeRarity(s){
 }
 function formatItemName(n){ return n ? String(n).replace(/_/g,' ').replace(/\s+/g,' ').trim() : ''; }
 
-// token pair handler (robust)
-function handlePairTokens(a,b){
-  const ra = normalizeRarity(a);
-  const rb = normalizeRarity(b);
-  if(rb && !ra) return {item:a, rarityRaw:b};
-  if(ra && !rb) return {item:b, rarityRaw:a};
-  if(ra && rb){
-    const rankA = RARITY_RANK[ra]||0, rankB = RARITY_RANK[rb]||0;
-    if(rankA >= rankB) return {item:b, rarityRaw:a};
-    return {item:a, rarityRaw:b};
-  }
-  // fallback: assume a=item b=rarity
-  return {item:a, rarityRaw:b};
-}
-
-// parse input
+/* NEW robust token-stream parser
+   - Builds a flat ordered token list from input (split on newlines, tabs, or 2+ spaces)
+   - Marks tokens that look like rarities
+   - Walks tokens pairing item+rarity deterministically:
+       * if token is rarity and next token is item -> pair(next,item)
+       * else if token is item and next token is rarity -> pair(item,next)
+       * else if token is item and next token absent or also item -> pair(item, '')
+       * isolated rarity attaches to previous item if previous has no rarity
+*/
 function parseCardText(text){
-  const linesIn = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
-  const items = [];
-  let i=0;
-  while(i < linesIn.length){
-    const line = linesIn[i];
-    const parts = line.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
-    if(parts.length >= 2){
-      for(let j=0;j<parts.length;j+=2){
-        const a = parts[j]||'', b = parts[j+1]||'';
-        const res = handlePairTokens(a,b);
-        items.push({item:res.item, rarityRaw:res.rarityRaw});
-      }
-      i++; continue;
-    }
-    const single = parts[0];
-    const maybeR = normalizeRarity(single);
-    if(maybeR){
-      if(items.length>0 && !items[items.length-1].rarityRaw) items[items.length-1].rarityRaw = single;
-      i++; continue;
-    }
-    // lookahead for next-line rarity (one or two tokens)
-    const next = linesIn[i+1] || '';
-    const nextParts = next.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
-    if(nextParts.length > 0){
-      let two = null;
-      if(nextParts.length > 1) two = (nextParts[0] + ' ' + nextParts[1]);
-      const maybeTwo = two ? normalizeRarity(two) : null;
-      const maybeOne = normalizeRarity(nextParts[0]);
-      if(maybeTwo){ items.push({item:single, rarityRaw:two}); i+=2; continue; }
-      if(maybeOne){ items.push({item:single, rarityRaw:nextParts[0]}); i+=2; continue; }
-    }
-    // fallback
-    items.push({item:single, rarityRaw:''});
-    i++;
+  // split into tokens preserving order. use newlines and tabs and two+ spaces as separators
+  // keep each token as original trimmed string
+  const rawLines = text.split(/\r?\n/);
+  const tokens = [];
+  for(const ln of rawLines){
+    if(!ln || !ln.trim()) continue;
+    // split line by tabs or 2+ spaces
+    const parts = ln.split(/\t| {2,}/).map(p=>p.trim()).filter(Boolean);
+    // if the line didn't split (single part), still push that single token
+    if(parts.length === 0) continue;
+    for(const p of parts) tokens.push(p);
   }
 
-  // fallback tokenization if not square
-  if(!Number.isInteger(Math.sqrt(items.length))){
-    const tokens = text.split(/\s+/).filter(Boolean);
-    const list = [];
-    for(let k=0;k<tokens.length;){
-      const t = tokens[k];
-      const maybe = normalizeRarity(tokens[k+1] || '');
-      if(maybe){ list.push({item:t, rarityRaw:tokens[k+1]}); k+=2; }
-      else {
-        let j=k+1, found=null;
-        while(j<tokens.length){ if(normalizeRarity(tokens[j])){ found=tokens[j]; break; } j++; }
-        if(found){ list.push({item:t, rarityRaw:found}); k = j+1; }
-        else { list.push({item:t, rarityRaw:''}); k++; }
+  // convert tokens to objects {text, isRarity, normRarity}
+  const tlist = tokens.map(t => {
+    const norm = normalizeRarity(t);
+    return { text: t, isRarity: !!norm, normR: norm };
+  });
+
+  // pair tokens
+  const pairs = [];
+  for(let i=0;i<tlist.length;){
+    const cur = tlist[i];
+    const next = tlist[i+1];
+    // case: rarity then item
+    if(cur.isRarity && next && !next.isRarity){
+      pairs.push({ item: next.text, rarityRaw: cur.text, rarity: cur.normR });
+      i += 2;
+      continue;
+    }
+    // case: item then rarity
+    if(!cur.isRarity && next && next.isRarity){
+      pairs.push({ item: cur.text, rarityRaw: next.text, rarity: next.normR });
+      i += 2;
+      continue;
+    }
+    // case: both are rarities (weird) -> attach next token as item if present, else skip
+    if(cur.isRarity && next && next.isRarity){
+      // prefer stronger rarity for the rarity value and treat other as orphaned item if possible
+      const rankA = RARITY_RANK[cur.normR]||0;
+      const rankB = RARITY_RANK[next.normR]||0;
+      const chosen = (rankA >= rankB) ? cur : next;
+      // attach the other token as item if a following non-rarity exists
+      if(tlist[i+2] && !tlist[i+2].isRarity){
+        pairs.push({ item: tlist[i+2].text, rarityRaw: chosen.text, rarity: chosen.normR });
+        i += 3; continue;
+      } else {
+        // fallback: skip one and treat current as rarity for an empty item
+        pairs.push({ item: '', rarityRaw: chosen.text, rarity: chosen.normR });
+        i += 1; continue;
       }
     }
-    if(Number.isInteger(Math.sqrt(list.length))) return list.map(x=>({item:formatItemName(x.item), rarity:normalizeRarity(x.rarityRaw)||'common', rarityRaw:x.rarityRaw || ''}));
+    // case: item then item (no rarity between)
+    if(!cur.isRarity && next && !next.isRarity){
+      // treat current as item with empty rarity
+      pairs.push({ item: cur.text, rarityRaw: '', rarity: null });
+      i += 1;
+      continue;
+    }
+    // last token single
+    if(!next){
+      if(cur.isRarity){
+        // isolated rarity: attach to previous item if previous exists and had no rarity
+        if(pairs.length > 0 && (!pairs[pairs.length-1].rarity || pairs[pairs.length-1].rarity === null)){
+          pairs[pairs.length-1].rarityRaw = cur.text;
+          pairs[pairs.length-1].rarity = cur.normR;
+        } else {
+          // no previous item: create empty item with this rarity
+          pairs.push({ item: '', rarityRaw: cur.text, rarity: cur.normR });
+        }
+      } else {
+        pairs.push({ item: cur.text, rarityRaw: '', rarity: null });
+      }
+      i += 1;
+    }
   }
 
-  return items.map(x=>({item:formatItemName(x.item), rarityRaw: x.rarityRaw || '', rarity: normalizeRarity(x.rarityRaw) || null}));
+  // final mapping: normalize item names & ensure rarity fallback to null (we'll resolve later)
+  return pairs.map(p => ({ item: formatItemName(p.item), rarityRaw: p.rarityRaw || '', rarity: p.rarity || null }));
 }
 
-// BUILD GRID — authoritative resolution of rarity (defensive)
+/* BUILD GRID — authoritative resolution of rarity (defensive)
+   Priority:
+     1) parser-provided normalized rarity
+     2) normalize(p.rarityRaw)
+     3) look in combined raw for 'very common' or 'super rare' mentions
+     4) fallback to 'common'
+*/
 function buildGridFromPairs(pairs){
   const count = pairs.length;
   const size = Math.sqrt(count);
@@ -217,31 +239,18 @@ function buildGridFromPairs(pairs){
     const row = [];
     for(let c=0;c<N;c++){
       const p = pairs[r*N + c] || {};
-      let item = p.item || '';
-      item = formatItemName(item);
-
-      // 1) if parser provided a 'rarity' field (already normalized) use it
+      let item = formatItemName(p.item || '');
       let key = null;
       if(p.rarity) key = normalizeRarity(p.rarity);
-
-      // 2) else try p.rarityRaw
       if(!key && p.rarityRaw) key = normalizeRarity(p.rarityRaw);
-
-      // 3) defensive: sometimes tokens split/trim remove 'Very' — look in raw strings for 'very'
       const rawCombined = ((p.rarityRaw || '') + ' ' + (p.item || '')).toString().toLowerCase();
       if(!key){
         if(/very[_\-\s]*common/.test(rawCombined) || (rawCombined.includes('very') && rawCombined.includes('common'))) key = 'very common';
         else if(/super[_\-\s]*rare/.test(rawCombined) || (rawCombined.includes('super') && rawCombined.includes('rare'))) key = 'super rare';
       }
-
-      // 4) final fallback: default to 'common'
       if(!key) key = 'common';
-
-      // ensure key is valid
       if(!RARITIES[key]) key = 'common';
-
       const meta = RARITIES[key];
-
       row.push({ item: item, rarityKey: key, basePts: meta.pts, mark: null });
     }
     grid.push(row);
@@ -249,7 +258,7 @@ function buildGridFromPairs(pairs){
   return grid;
 }
 
-// RENDER GRID (fixed-size per-cell approach)
+/* Render + gameplay (same behaviour as before) */
 function renderGrid(){
   const container = document.getElementById('gridContainer'); container.innerHTML = '';
   const maxTotal = 760, perCellMax = 160;
@@ -282,12 +291,12 @@ function renderGrid(){
     }
   }
 
-  const lineLayer = document.createElement('div'); lineLayer.className = 'line-layer';
+  const lineLayer = document.createElement('div'); lineLayer.className='line-layer';
   root.appendChild(gridEl); root.appendChild(lineLayer); container.appendChild(root);
 }
 
-// marks, lines, overlays, scoring (unchanged behaviour)
 function cycleMark(r,c){ const cur = grid[r][c].mark; grid[r][c].mark = cur===null ? 'X' : (cur==='X' ? 'O' : null); }
+
 function getLinesForTeam(team){
   const res=[];
   for(let r=0;r<N;r++){ let ok=true; for(let c=0;c<N;c++){ if(grid[r][c].mark !== team){ ok=false; break; } } if(ok) res.push({type:'row',i:r}); }
@@ -410,29 +419,25 @@ document.getElementById('parseBtn').addEventListener('click', ()=>{
   const teamO = document.getElementById('teamOName').value || 'Team O';
   document.getElementById('teamXDisplay').textContent = teamX;
   document.getElementById('teamODisplay').textContent = teamO;
-  const text = document.getElementById('cardInput').value.trim();
-  if(!text){ alert('Please paste card text.'); return; }
-  const parsed = parseCardText(text); // returns {item, rarityRaw, rarity}
-  // build pairs with both raw and normalized fields
+  const text = document.getElementById('cardInput').value;
+  if(!text || !text.trim()){ alert('Please paste card text.'); return; }
+  const parsed = parseCardText(text);
   const pairs = parsed.map(p => ({ item: p.item, rarityRaw: p.rarityRaw || '', rarity: p.rarity || null }));
   const built = buildGridFromPairs(pairs);
   if(!built){ alert('Could not parse a square card from the text. Make sure there are between 1 and 100 cells and the total is a perfect square (1x1 .. 10x10).'); return; }
   document.getElementById('cardSize').textContent = N + ' x ' + N;
-
   // legend
   const legend = document.getElementById('legend'); legend.innerHTML='';
   ['very common','common','uncommon','rare','super rare'].forEach(k=>{
     const d = document.createElement('div'); d.className='key '+RARITIES[k].cls; d.style.padding='8px';
     d.textContent = RARITIES[k].key + ' — ' + RARITIES[k].pts + ' pts'; legend.appendChild(d);
   });
-
   document.getElementById('step2').style.display='none';
   document.getElementById('viewer').style.display='block';
   renderGrid();
   requestAnimationFrame(()=>{ renderEverything(); });
 });
 
-// reset/export
 document.getElementById('resetMarks').addEventListener('click', ()=>{ for(let r=0;r<N;r++) for(let c=0;c<N;c++) grid[r][c].mark = null; renderEverything(); });
 document.getElementById('exportBtn').addEventListener('click', ()=>{
   const flat = [];
