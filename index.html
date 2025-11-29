@@ -6,7 +6,7 @@
   <title>Randomiser tournament tracker</title>
   <style>
     :root{--bg:#f6fbff;--card-bg:#fff;--accent:#2d6cdf}
-    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,Arial,sans-serif; background:var(--bg); color:#202124; margin:0; padding:24px}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:#202124; margin:0; padding:24px}
     .container{max-width:1100px;margin:0 auto}
     h1{margin:0 0 8px;font-size:18px}
     .stage{background:var(--card-bg);padding:14px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.06);margin-bottom:18px}
@@ -24,19 +24,7 @@
     /* Grid & cells */
     .grid-root{position:relative;display:flex;justify-content:center}
     .grid{position:relative;display:grid;background:#f8fbff;border:1px solid #cbd9ff;padding:6px;border-radius:6px}
-    .cell {
-  background:white;
-  border-radius:6px;
-  padding:6px;
-  text-align:center;
-  position:relative;
-  min-width:170px;
-  min-height:130px;
-  display:flex;
-  flex-direction:column;
-  justify-content:center;
-  font-size:0.8rem;
-}
+    .cell{box-sizing:border-box;border:1px solid rgba(0,0,0,.06);padding:10px;display:flex;flex-direction:column;justify-content:center;align-items:center;font-size:13px;position:relative;overflow:hidden;text-align:center}
     .item{font-weight:700;white-space:normal;overflow-wrap:break-word;word-break:normal}
     .rarity{font-size:12px;opacity:.9;margin-top:6px}
     .points{font-size:12px;opacity:.95;margin-top:6px}
@@ -71,7 +59,7 @@
     <h1>Randomiser tournament tracker</h1>
 
     <div class="stage" id="step1">
-      <div class="small muted">Step 1 — Enter team names and optional sound URLs</div>
+      <div class="small muted">Step 1 — Enter team names</div>
       <label>Team X name</label>
       <input id="teamXName" type="text" placeholder="Team X" value="Team X" />
       <label>Team O name</label>
@@ -124,7 +112,7 @@
   </div>
 
 <script>
-// rarities
+// rarities (keys are normalized lower-case)
 const RARITIES = {
   'very common': {key:'Very Common',pts:1,cls:'very-common'},
   'common': {key:'Common',pts:2,cls:'common'},
@@ -136,202 +124,362 @@ const RARITIES = {
 let grid = [];
 let N = 0;
 let lines = {X:[], O:[]};
-let prevLines = {X:[], O:[]}; // to detect new lines (for sound)
+let prevLines = {X:[], O:[]};
 
-
-function normalizeRarity(s){ if(!s) return null; s = s.trim().toLowerCase(); // direct match first
-  if(RARITIES[s]) return s;
-  // exact phrase matches
-  if(s === 'very common' || s === 'very_common') return 'very common';
-  if(s === 'super rare' || s === 'super_rare') return 'super rare';
+// Normalise rarities and prioritise two-word rarities like "very common"
+function normalizeRarity(s){
+  if(!s) return null;
+  // sanitize
+  s = s.trim().toLowerCase();
+  s = s.replace(/_/g,' ').replace(/\s+/g,' ').trim();
+  // PRIORITY: two-word exact matches first
+  if(s === 'very common') return 'very common';
+  if(s === 'super rare') return 'super rare';
+  // then single-word exacts
   if(s === 'uncommon') return 'uncommon';
   if(s === 'rare') return 'rare';
   if(s === 'common') return 'common';
-  // fuzzy checks
+  // fuzzy fallback (still prefer 'very common' if both words present)
   if(s.includes('very') && s.includes('common')) return 'very common';
   if(s.includes('super') && s.includes('rare')) return 'super rare';
   if(s.includes('uncommon')) return 'uncommon';
   if(s.includes('rare')) return 'rare';
   if(s.includes('common')) return 'common';
-  return null; }
+  return null;
+}
 
+function formatItemName(name){
+  if(!name) return '';
+  return name.replace(/_/g,' ').replace(/\s+/g,' ').trim();
+}
+
+// Parsing: accepts "ITEM   RARITY" pairs on same line, or ITEM then next-line rarity (including two-word rarities)
 function parseCardText(text){
   const linesIn = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
   const items = [];
-  let i = 0;
+  let i=0;
   while(i < linesIn.length){
     const line = linesIn[i];
     const parts = line.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
     if(parts.length >= 2){
-      for(let j=0;j<parts.length;j+=2){ items.push({item:parts[j], rarityRaw:parts[j+1]||''}); }
+      for(let j=0;j<parts.length;j+=2){
+        items.push({item:parts[j], rarityRaw:parts[j+1]||''});
+      }
       i++; continue;
     }
     const single = parts[0];
+    // if single is a rarity, attach to previous item if available
     const maybeR = normalizeRarity(single);
-    if(maybeR){ if(items.length>0 && !items[items.length-1].rarityRaw) items[items.length-1].rarityRaw = single; i++; continue; }
-    let next = linesIn[i+1] || '';
-    let nextParts = next.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
+    if(maybeR){
+      if(items.length>0 && !items[items.length-1].rarityRaw){
+        items[items.length-1].rarityRaw = single;
+      }
+      i++; continue;
+    }
+    // lookahead: next line might be rarity (one- or two-token)
+    const next = linesIn[i+1] || '';
+    const nextParts = next.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
     if(nextParts.length>0){
-      // try two-token rarity first (e.g. 'Very Common')
       let two = null;
-      if(nextParts.length > 1) two = (nextParts[0] + ' ' + nextParts[1]);
+      if(nextParts.length>1) two = (nextParts[0] + ' ' + nextParts[1]);
       const maybeTwo = two ? normalizeRarity(two) : null;
       const maybeOne = normalizeRarity(nextParts[0]);
-      if(maybeTwo){ items.push({item:single, rarityRaw: two}); i+=2; continue; }
-      if(maybeOne){ items.push({item:single, rarityRaw: nextParts[0]}); i+=2; continue; }
+      if(maybeTwo){ items.push({item:single, rarityRaw:two}); i+=2; continue; }
+      if(maybeOne){ items.push({item:single, rarityRaw:nextParts[0]}); i+=2; continue; }
     }
-    items.push({item:single, rarityRaw:''}); i++;
+    // fallback: item only
+    items.push({item:single, rarityRaw:''});
+    i++;
   }
 
-  // fallback tokenisation if needed
+  // fallback tokenization if item count isn't a square
   if(!Number.isInteger(Math.sqrt(items.length))){
     const tokens = text.split(/\s+/).filter(Boolean);
     const list = [];
-    for(let k=0;k<tokens.length;){ const t=tokens[k]; const maybeR = normalizeRarity(tokens[k+1]||''); if(maybeR){ list.push({item:t, rarityRaw:tokens[k+1]}); k+=2; } else { let j=k+1; let found=null; while(j<tokens.length){ if(normalizeRarity(tokens[j])){ found=tokens[j]; break;} j++; } if(found){ list.push({item:t, rarityRaw:found}); k=j+1; } else { list.push({item:t, rarityRaw:''}); k++; } } }
-    if(Number.isInteger(Math.sqrt(list.length))){ return list.map(x=>({item:formatItemName(x.item), rarity:normalizeRarity(x.rarityRaw)||'common'})); }
+    for(let k=0;k<tokens.length;){
+      const t = tokens[k];
+      const maybeR = normalizeRarity(tokens[k+1] || '');
+      if(maybeR){ list.push({item:t, rarityRaw:tokens[k+1]}); k+=2; }
+      else {
+        let j=k+1, found=null;
+        while(j<tokens.length){ if(normalizeRarity(tokens[j])){ found=tokens[j]; break; } j++; }
+        if(found){ list.push({item:t, rarityRaw:found}); k = j+1; }
+        else { list.push({item:t, rarityRaw:''}); k++; }
+      }
+    }
+    if(Number.isInteger(Math.sqrt(list.length))) return list.map(x=>({item:formatItemName(x.item), rarity:normalizeRarity(x.rarityRaw)||'common'}));
   }
 
   return items.map(x=>({item:formatItemName(x.item), rarity:normalizeRarity(x.rarityRaw)||'common'}));
 }
 
-function formatItemName(name){ if(!name) return ''; // replace underscores with spaces and collapse multiple spaces
-  return name.replace(/_/g,' ').replace(/\s+/g,' ').trim(); }
-
 function buildGridFromPairs(pairs){
-  const count = pairs.length; const size = Math.sqrt(count);
+  const count = pairs.length;
+  const size = Math.sqrt(count);
   if(!Number.isInteger(size) || size < 1 || size > 10) return null;
   N = size; grid = [];
-  for(let r=0;r<N;r++){ const row = []; for(let c=0;c<N;c++){ const p = pairs[r*N + c]; const rar = (p && p.rarity) ? p.rarity : 'common'; const meta = RARITIES[rar] || RARITIES['common']; row.push({item:(p && p.item) ? p.item : '', rarityKey:rar, basePts:meta.pts, mark:null}); } grid.push(row); }
+  for(let r=0;r<N;r++){
+    const row = [];
+    for(let c=0;c<N;c++){
+      const p = pairs[r*N + c];
+      const rar = (p && p.rarity) ? p.rarity : 'common';
+      const meta = RARITIES[rar] || RARITIES['common'];
+      row.push({item:(p&&p.item)?p.item:'', rarityKey:rar, basePts:meta.pts, mark:null});
+    }
+    grid.push(row);
+  }
   return grid;
 }
 
 function renderGrid(){
-  const container = document.getElementById('gridContainer'); container.innerHTML = '';
-  const root = document.createElement('div'); root.className = 'grid-root';
+  const container = document.getElementById('gridContainer');
+  container.innerHTML='';
 
-  // determine a comfortable cell size so full words fit and grid is square looking
-  const maxTotal = 760; const perCellMax = 160; const total = Math.min(maxTotal, Math.max(N*90, N*perCellMax)); const cellSize = Math.floor(total / N);
+  // determine grid total width and cell size (reliable fixed pixel approach)
+  const maxTotal = 760;
+  const perCellMax = 160;
+  const total = Math.min(maxTotal, Math.max(N*80, N*perCellMax));
+  const cellSize = Math.floor(total / N);
 
-  const gridEl = document.createElement('div'); gridEl.className = 'grid'; gridEl.style.gridTemplateColumns = `repeat(${N}, ${cellSize}px)`; gridEl.style.gridAutoRows = `${Math.floor(cellSize*0.85)}px`; gridEl.style.width = total + 'px';
+  const root = document.createElement('div');
+  root.style.position = 'relative';
+  root.style.width = total + 'px';
+  root.style.maxWidth = '100%';
+
+  const gridEl = document.createElement('div');
+  gridEl.className = 'grid';
+  gridEl.style.gridTemplateColumns = `repeat(${N}, ${cellSize}px)`;
+  gridEl.style.gridAutoRows = `${Math.floor(cellSize*0.85)}px`;
+  gridEl.style.width = total + 'px';
 
   for(let r=0;r<N;r++){
     for(let c=0;c<N;c++){
       const cell = grid[r][c];
-      const el = document.createElement('div'); el.className = 'cell ' + RARITIES[cell.rarityKey].cls; el.dataset.r=r; el.dataset.c=c;
+      const cellEl = document.createElement('div');
+      cellEl.className = 'cell ' + (RARITIES[cell.rarityKey] ? RARITIES[cell.rarityKey].cls : RARITIES['common'].cls);
+      cellEl.dataset.r = r; cellEl.dataset.c = c;
+
       const itemEl = document.createElement('div'); itemEl.className='item'; itemEl.textContent = cell.item;
       const rarityEl = document.createElement('div'); rarityEl.className='rarity'; rarityEl.textContent = RARITIES[cell.rarityKey].key;
-      const ptsEl = document.createElement('div'); ptsEl.className='points'; ptsEl.textContent = cell.basePts + ' pts';
-      el.appendChild(itemEl); el.appendChild(rarityEl); el.appendChild(ptsEl);
-      const mark = document.createElement('div'); mark.className='overlayMark'; el.appendChild(mark);
-      el.addEventListener('click', ()=>{ toggleMark(r,c); renderEverything(); });
-      gridEl.appendChild(el);
+      const pointsEl = document.createElement('div'); pointsEl.className='points'; pointsEl.textContent = cell.basePts + ' pts';
+
+      cellEl.appendChild(itemEl);
+      cellEl.appendChild(rarityEl);
+      cellEl.appendChild(pointsEl);
+
+      const mark = document.createElement('div'); mark.className='overlayMark'; cellEl.appendChild(mark);
+
+      cellEl.addEventListener('click', ()=>{ cycleMark(r,c); renderEverything(); });
+
+      gridEl.appendChild(cellEl);
     }
   }
 
-  const lineLayer = document.createElement('div'); lineLayer.className='line-layer';
-  root.appendChild(gridEl); root.appendChild(lineLayer); container.appendChild(root);
+  const lineLayer = document.createElement('div');
+  lineLayer.className = 'line-layer';
+
+  root.appendChild(gridEl);
+  root.appendChild(lineLayer);
+  container.appendChild(root);
 }
 
-function toggleMark(r,c){ const cur = grid[r][c].mark; if(cur === null) { grid[r][c].mark = 'X'; } else if(cur === 'X'){ grid[r][c].mark = 'O'; } else { grid[r][c].mark = null; } }
-
+function cycleMark(r,c){
+  const cur = grid[r][c].mark;
+  grid[r][c].mark = cur === null ? 'X' : (cur === 'X' ? 'O' : null);
+}
 
 function getLinesForTeam(team){
   const res=[];
-  for(let r=0;r<N;r++){ let ok=true; for(let c=0;c<N;c++){ if(grid[r][c].mark !== team){ ok=false; break;} } if(ok) res.push({type:'row',i:r}); }
-  for(let c=0;c<N;c++){ let ok=true; for(let r=0;r<N;r++){ if(grid[r][c].mark !== team){ ok=false; break;} } if(ok) res.push({type:'col',i:c}); }
-  let ok=true; for(let i=0;i<N;i++){ if(grid[i][i].mark !== team){ ok=false; break;} } if(ok) res.push({type:'diag',which:0});
-  ok=true; for(let i=0;i<N;i++){ if(grid[i][N-1-i].mark !== team){ ok=false; break;} } if(ok) res.push({type:'diag',which:1});
+  // rows
+  for(let r=0;r<N;r++){
+    let ok=true; for(let c=0;c<N;c++){ if(grid[r][c].mark !== team){ ok=false; break; } }
+    if(ok) res.push({type:'row',i:r});
+  }
+  // cols
+  for(let c=0;c<N;c++){
+    let ok=true; for(let r=0;r<N;r++){ if(grid[r][c].mark !== team){ ok=false; break; } }
+    if(ok) res.push({type:'col',i:c});
+  }
+  // diagonals
+  let ok=true; for(let i=0;i<N;i++){ if(grid[i][i].mark !== team){ ok=false; break; } } if(ok) res.push({type:'diag',which:0});
+  ok=true; for(let i=0;i<N;i++){ if(grid[i][N-1-i].mark !== team){ ok=false; break; } } if(ok) res.push({type:'diag',which:1});
   return res;
 }
 
-function arraysEqual(a,b){ if(a.length!==b.length) return false; const sa = JSON.stringify(a); const sb = JSON.stringify(b); return sa===sb; }
-
 function renderEverything(){
-  const gridRoot = document.querySelector('#gridContainer .grid-root'); if(!gridRoot) return; const gridEl = gridRoot.querySelector('.grid'); const lineLayer = gridRoot.querySelector('.line-layer');
+  const container = document.getElementById('gridContainer');
+  const root = container.querySelector('div');
+  if(!root) return;
+  const gridEl = root.querySelector('.grid');
+  if(!gridEl) return;
+
+  // update X/O overlays
   const cells = gridEl.querySelectorAll('.cell');
-  cells.forEach(cellEl=>{ const r=parseInt(cellEl.dataset.r), c=parseInt(cellEl.dataset.c); const mEl=cellEl.querySelector('.overlayMark'); const mark=grid[r][c].mark; mEl.className='overlayMark'; if(mark==='X'){ mEl.classList.add('x'); mEl.textContent='X'; } else if(mark==='O'){ mEl.classList.add('o'); mEl.textContent='O'; } else { mEl.textContent=''; } cellEl.classList.remove('glow'); });
+  cells.forEach(cellEl=>{
+    const r = parseInt(cellEl.dataset.r,10), c = parseInt(cellEl.dataset.c,10);
+    const mEl = cellEl.querySelector('.overlayMark');
+    const mark = grid[r][c].mark;
+    mEl.className = 'overlayMark';
+    if(mark === 'X'){ mEl.classList.add('x'); mEl.textContent = 'X'; }
+    else if(mark === 'O'){ mEl.classList.add('o'); mEl.textContent = 'O'; }
+    else mEl.textContent = '';
+    cellEl.classList.remove('glow');
+  });
 
   // compute completed lines
   lines.X = getLinesForTeam('X'); lines.O = getLinesForTeam('O');
 
-  // detect newly completed lines to play sound once
-  const newX = !arraysEqual(lines.X, prevLines.X);
-  const newO = !arraysEqual(lines.O, prevLines.O);
+  // clear overlay layer fully
+  const lineLayer = root.querySelector('.line-layer');
+  if(lineLayer) lineLayer.innerHTML='';
 
-  // clear overlays
-  lineLayer.innerHTML = '';
-
-  // map whether cell is in any completed line for a team (non-stacking)
+  // boolean map if a cell is part of any completed line for that team
   const inLine = {};
   for(let r=0;r<N;r++) for(let c=0;c<N;c++) inLine[`${r},${c}`] = {X:false,O:false};
 
-  ['X','O'].forEach(team=>{ (lines[team]||[]).forEach(ln=>{
-    if(ln.type==='row'){ const r=ln.i; for(let c=0;c<N;c++) inLine[`${r},${c}`][team]=true; drawRowOverlay(r,team); }
-    else if(ln.type==='col'){ const c=ln.i; for(let r=0;r<N;r++) inLine[`${r},${c}`][team]=true; drawColOverlay(c,team); }
-    else if(ln.type==='diag'){ if(ln.which===0){ for(let i=0;i<N;i++) inLine[`${i},${i}`][team]=true; drawDiagOverlay(0,team);} else { for(let i=0;i<N;i++) inLine[`${i},${N-1-i}`][team]=true; drawDiagOverlay(1,team);} }
-  }); });
+  // mark inLine and draw overlays (no stacking)
+  ['X','O'].forEach(team=>{
+    (lines[team]||[]).forEach(ln=>{
+      if(ln.type === 'row'){ const r=ln.i; for(let c=0;c<N;c++) inLine[`${r},${c}`][team]=true; drawRowOverlay(r,team); }
+      else if(ln.type === 'col'){ const c=ln.i; for(let r=0;r<N;r++) inLine[`${r},${c}`][team]=true; drawColOverlay(c,team); }
+      else if(ln.type === 'diag'){ if(ln.which===0){ for(let i=0;i<N;i++) inLine[`${i},${i}`][team]=true; drawDiagOverlay(0,team);} else { for(let i=0;i<N;i++) inLine[`${i},${N-1-i}`][team]=true; drawDiagOverlay(1,team);} }
+    });
+  });
 
   // apply glow to any marked cell that is doubled
   for(let r=0;r<N;r++){
     for(let c=0;c<N;c++){
-      const key = `${r},${c}`; const el = gridEl.children[r*N + c]; if(!el) continue;
+      const key = `${r},${c}`;
+      const el = gridEl.children[r*N + c];
+      if(!el) continue;
       if(grid[r][c].mark === 'X' && inLine[key].X) el.classList.add('glow');
       if(grid[r][c].mark === 'O' && inLine[key].O) el.classList.add('glow');
     }
   }
 
-  // compute scores (doubling at most once)
+  // compute scores — doubling at most once per cell
   let scoreX = 0, scoreO = 0;
   for(let r=0;r<N;r++){
     for(let c=0;c<N;c++){
-      const cell = grid[r][c]; const key=`${r},${c}`; const mark = cell.mark;
+      const cell = grid[r][c]; const key = `${r},${c}`; const mark = cell.mark;
       if(mark === 'X'){ const multiplier = inLine[key].X ? 2 : 1; scoreX += cell.basePts * multiplier; }
       else if(mark === 'O'){ const multiplier = inLine[key].O ? 2 : 1; scoreO += cell.basePts * multiplier; }
-      const ptsEl = gridEl.children[r*N+c].querySelector('.points'); let eff = cell.basePts; if(mark==='X' && inLine[key].X) eff = cell.basePts*2; if(mark==='O' && inLine[key].O) eff = cell.basePts*2; ptsEl.textContent = eff + ' pts';
+      // update per-cell displayed pts
+      const idx = r*N + c; const cellEl = gridEl.children[idx]; const ptsEl = cellEl.querySelector('.points');
+      let effective = cell.basePts;
+      if(cell.mark === 'X' && inLine[key].X) effective = cell.basePts * 2;
+      if(cell.mark === 'O' && inLine[key].O) effective = cell.basePts * 2;
+      ptsEl.textContent = effective + ' pts';
     }
   }
 
-  document.getElementById('scoreX').textContent = scoreX; document.getElementById('scoreO').textContent = scoreO;
+  document.getElementById('scoreX').textContent = scoreX;
+  document.getElementById('scoreO').textContent = scoreO;
 
-    // store current as prev for next render
+  // store prev lines
   prevLines.X = JSON.parse(JSON.stringify(lines.X)); prevLines.O = JSON.parse(JSON.stringify(lines.O));
 }
 
-// overlay drawing helpers — precise bounding boxes
-function drawRowOverlay(r,team){ const root = document.querySelector('#gridContainer .grid-root'); const gridEl = root.querySelector('.grid'); const lineLayer = root.querySelector('.line-layer'); const first = gridEl.children[r*N + 0].getBoundingClientRect(); const last = gridEl.children[r*N + (N-1)].getBoundingClientRect(); const gridRect = gridEl.getBoundingClientRect(); const left = first.left - gridRect.left; const top = first.top - gridRect.top; const width = last.right - first.left; const height = first.height; const div = document.createElement('div'); div.className='lineOverlay'; div.style.left = left + 'px'; div.style.top = top + 'px'; div.style.width = width + 'px'; div.style.height = height + 'px'; div.style.background = team==='X' ? 'rgba(221,68,68,0.28)' : 'rgba(42,142,42,0.28)'; lineLayer.appendChild(div); }
-function drawColOverlay(c,team){ const root = document.querySelector('#gridContainer .grid-root'); const gridEl = root.querySelector('.grid'); const lineLayer = root.querySelector('.line-layer'); const first = gridEl.children[0*N + c].getBoundingClientRect(); const last = gridEl.children[(N-1)*N + c].getBoundingClientRect(); const gridRect = gridEl.getBoundingClientRect(); const left = first.left - gridRect.left; const top = first.top - gridRect.top; const width = first.width; const height = (last.bottom - first.top); const div = document.createElement('div'); div.className='lineOverlay'; div.style.left = left + 'px'; div.style.top = top + 'px'; div.style.width = width + 'px'; div.style.height = height + 'px'; div.style.background = team==='X' ? 'rgba(221,68,68,0.28)' : 'rgba(42,142,42,0.28)'; lineLayer.appendChild(div); }
-function drawDiagOverlay(which,team){ const root = document.querySelector('#gridContainer .grid-root'); const gridEl = root.querySelector('.grid'); const lineLayer = root.querySelector('.line-layer'); const gridRect = gridEl.getBoundingClientRect(); const a = which===0 ? gridEl.children[0].getBoundingClientRect() : gridEl.children[N-1].getBoundingClientRect(); const b = which===0 ? gridEl.children[(N-1)*N + (N-1)].getBoundingClientRect() : gridEl.children[(N-1)*N + 0].getBoundingClientRect(); const svgNS='http://www.w3.org/2000/svg'; const svg = document.createElementNS(svgNS,'svg'); svg.setAttribute('width', gridRect.width); svg.setAttribute('height', gridRect.height); svg.style.position='absolute'; svg.style.left='0'; svg.style.top='0'; const line = document.createElementNS(svgNS,'line'); const ax = (a.left - gridRect.left) + a.width/2; const ay = (a.top - gridRect.top) + a.height/2; const bx = (b.left - gridRect.left) + b.width/2; const by = (b.top - gridRect.top) + b.height/2; line.setAttribute('x1',ax); line.setAttribute('y1',ay); line.setAttribute('x2',bx); line.setAttribute('y2',by); line.setAttribute('stroke', team==='X' ? 'rgba(221,68,68,0.35)' : 'rgba(42,142,42,0.35)'); line.setAttribute('stroke-width', Math.max(10, Math.min(36, Math.min(a.width,a.height)*0.6))); line.setAttribute('stroke-linecap','round'); svg.appendChild(line); svg.classList.add('lineOverlay'); lineLayer.appendChild(svg); }
+// overlay drawing (precise)
+function drawRowOverlay(rowIndex, team){
+  const container = document.getElementById('gridContainer');
+  const root = container.querySelector('div'); if(!root) return;
+  const gridEl = root.querySelector('.grid'); const lineLayer = root.querySelector('.line-layer');
+  if(!gridEl || !lineLayer) return;
+  const cells = gridEl.querySelectorAll('.cell');
+  const first = cells[rowIndex*N + 0].getBoundingClientRect();
+  const last  = cells[rowIndex*N + (N-1)].getBoundingClientRect();
+  const gridRect = gridEl.getBoundingClientRect();
+  const left = first.left - gridRect.left; const top = first.top - gridRect.top;
+  const width = last.right - first.left; const height = first.height;
+  const div = document.createElement('div'); div.className='lineOverlay';
+  div.style.position='absolute'; div.style.left = (left) + 'px'; div.style.top = (top) + 'px';
+  div.style.width = width + 'px'; div.style.height = height + 'px';
+  div.style.background = team==='X' ? 'rgba(221,68,68,0.28)' : 'rgba(42,142,42,0.28)';
+  div.style.borderRadius = '6px';
+  lineLayer.appendChild(div);
+}
+function drawColOverlay(colIndex, team){
+  const container = document.getElementById('gridContainer');
+  const root = container.querySelector('div'); if(!root) return;
+  const gridEl = root.querySelector('.grid'); const lineLayer = root.querySelector('.line-layer');
+  if(!gridEl || !lineLayer) return;
+  const cells = gridEl.querySelectorAll('.cell');
+  const first = cells[0*N + colIndex].getBoundingClientRect();
+  const last  = cells[(N-1)*N + colIndex].getBoundingClientRect();
+  const gridRect = gridEl.getBoundingClientRect();
+  const left = first.left - gridRect.left; const top = first.top - gridRect.top;
+  const width = first.width; const height = (last.bottom - first.top);
+  const div = document.createElement('div'); div.className='lineOverlay';
+  div.style.position='absolute'; div.style.left = (left) + 'px'; div.style.top = (top) + 'px';
+  div.style.width = width + 'px'; div.style.height = height + 'px';
+  div.style.background = team==='X' ? 'rgba(221,68,68,0.28)' : 'rgba(42,142,42,0.28)';
+  div.style.borderRadius = '6px';
+  lineLayer.appendChild(div);
+}
+function drawDiagOverlay(which, team){
+  const container = document.getElementById('gridContainer');
+  const root = container.querySelector('div'); if(!root) return;
+  const gridEl = root.querySelector('.grid'); const lineLayer = root.querySelector('.line-layer');
+  if(!gridEl || !lineLayer) return;
+  const gridRect = gridEl.getBoundingClientRect();
+  const cells = gridEl.querySelectorAll('.cell');
+  const a = which===0 ? cells[0].getBoundingClientRect() : cells[N-1].getBoundingClientRect();
+  const b = which===0 ? cells[(N-1)*N + (N-1)].getBoundingClientRect() : cells[(N-1)*N + 0].getBoundingClientRect();
+  const ax = (a.left - gridRect.left) + a.width/2;
+  const ay = (a.top - gridRect.top)  + a.height/2;
+  const bx = (b.left - gridRect.left) + b.width/2;
+  const by = (b.top - gridRect.top)  + b.height/2;
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS,'svg');
+  svg.setAttribute('width', gridRect.width); svg.setAttribute('height', gridRect.height);
+  svg.style.position='absolute'; svg.style.left='0'; svg.style.top='0';
+  const line = document.createElementNS(svgNS,'line');
+  line.setAttribute('x1', ax); line.setAttribute('y1', ay); line.setAttribute('x2', bx); line.setAttribute('y2', by);
+  line.setAttribute('stroke', team==='X' ? 'rgba(221,68,68,0.35)' : 'rgba(42,142,42,0.35)');
+  line.setAttribute('stroke-width', Math.max(10, Math.min(36, Math.min(a.width,a.height)*0.6)));
+  line.setAttribute('stroke-linecap','round');
+  svg.appendChild(line);
+  svg.classList.add('lineOverlay');
+  lineLayer.appendChild(svg);
+}
 
 // UI wiring
 document.getElementById('toStep2').addEventListener('click', ()=>{ document.getElementById('step1').style.display='none'; document.getElementById('step2').style.display='block'; });
 
-// parse and render
 document.getElementById('parseBtn').addEventListener('click', ()=>{
-  // load sounds from inputs
-  
-
-  const teamX = document.getElementById('teamXName').value || 'Team X'; const teamO = document.getElementById('teamOName').value || 'Team O'; document.getElementById('teamXDisplay').textContent = teamX; document.getElementById('teamODisplay').textContent = teamO;
-  const text = document.getElementById('cardInput').value.trim(); if(!text){ alert('Please paste card text.'); return; }
+  const teamX = document.getElementById('teamXName').value || 'Team X';
+  const teamO = document.getElementById('teamOName').value || 'Team O';
+  document.getElementById('teamXDisplay').textContent = teamX;
+  document.getElementById('teamODisplay').textContent = teamO;
+  const text = document.getElementById('cardInput').value.trim();
+  if(!text){ alert('Please paste card text.'); return; }
   const pairs = parseCardText(text);
   const built = buildGridFromPairs(pairs);
-  if(!built){ alert('Could not parse a square card from the text. Make sure the total number of cells is a perfect square (1x1 .. 10x10).'); return; }
-  document.getElementById('cardSize').textContent = N + ' x ' + N;
+  if(!built){ alert('Could not parse a square card from the text. Make sure there are between 1 and 100 cells and the total is a perfect square (1x1 .. 10x10).'); return; }
+  document.getElementById('cardSize').textContent = N+' x '+N;
 
   // legend
   const legend = document.getElementById('legend'); legend.innerHTML='';
-  for(const key of ['very common','common','uncommon','rare','super rare']){ const d=document.createElement('div'); d.className='key '+RARITIES[key].cls; d.style.padding='8px'; d.textContent = RARITIES[key].key + ' — ' + RARITIES[key].pts + ' pts'; legend.appendChild(d); }
+  for(const key of ['very common','common','uncommon','rare','super rare']){
+    const l=document.createElement('div'); l.className='key '+RARITIES[key].cls; l.style.padding='8px';
+    l.textContent = RARITIES[key].key + ' — ' + RARITIES[key].pts + ' pts'; legend.appendChild(l);
+  }
 
-  document.getElementById('step2').style.display='none'; document.getElementById('viewer').style.display='block';
-  renderGrid(); requestAnimationFrame(()=>{ renderEverything(); });
+  document.getElementById('step2').style.display='none';
+  document.getElementById('viewer').style.display='block';
+  renderGrid();
+  // wait for layout to stabilise then draw overlays
+  requestAnimationFrame(()=>{ renderEverything(); });
 });
 
-// reset marks
+// reset
 document.getElementById('resetMarks').addEventListener('click', ()=>{ for(let r=0;r<N;r++) for(let c=0;c<N;c++) grid[r][c].mark = null; renderEverything(); });
 
 // export
 document.getElementById('exportBtn').addEventListener('click', ()=>{
-  const flat = [];
-  for(let r=0;r<N;r++) for(let c=0;c<N;c++){ const cell = grid[r][c]; flat.push((cell.item||'') + '\n' + RARITIES[cell.rarityKey].key); }
+  const flat=[];
+  for(let r=0;r<N;r++) for(let c=0;c<N;c++){ const cell = grid[r][c]; flat.push(cell.item + '\n' + RARITIES[cell.rarityKey].key); }
   prompt('Copy the card text below (paste back into the importer to recreate the card):', flat.join('\n'));
 });
 </script>
