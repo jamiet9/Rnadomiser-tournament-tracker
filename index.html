@@ -1,371 +1,124 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Randomiser tournament tracker</title>
-  <style>
-    :root{--bg:#f6fbff;--card-bg:#fff;--accent:#2d6cdf}
-    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,Arial,sans-serif; background:var(--bg); color:#202124; margin:0; padding:24px}
-    .container{max-width:1100px;margin:0 auto}
-    h1{margin:0 0 8px;font-size:18px}
-    .stage{background:var(--card-bg);padding:14px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.06);margin-bottom:18px}
-    label{display:block;margin:8px 0 6px;font-weight:600}
-    input[type=text], textarea{width:100%;box-sizing:border-box;padding:8px;border:1px solid #d1d7e0;border-radius:6px;font-size:13px}
-    textarea{height:120px; font-family:monospace; white-space:pre-wrap}
-    .row{display:flex;gap:12px}
-    .leftcol{width:150px}
-    .center{flex:1}
-    .btn{display:inline-block;padding:8px 12px;border-radius:6px;border:0;background:var(--accent);color:#fff;cursor:pointer}
-    .grid-wrap{display:flex;align-items:center;gap:12px}
-    .score-box{width:150px;background:#fff;padding:8px;border-radius:8px;border:1px solid #e6eefc;text-align:center}
-    .score-box h3{margin:6px 0;font-size:16px}
-
-    /* Grid & cells */
-    .grid-root{position:relative;display:flex;justify-content:center}
-    .grid{position:relative;display:grid;background:#f8fbff;border:1px solid #cbd9ff;padding:6px;border-radius:6px}
-    /* cell font-size is set dynamically via --cell-font-size */
-    .cell{box-sizing:border-box;border:1px solid rgba(0,0,0,.06);padding:10px;display:flex;flex-direction:column;justify-content:center;align-items:center;position:relative;overflow:hidden;text-align:center;
-      font-size:var(--cell-font-size,13px); line-height:1.05;
-    }
-    .item{font-weight:700;white-space:normal;overflow-wrap:break-word;word-break:normal}
-    .rarity{font-size:0.9em;opacity:.9;margin-top:6px}
-    .points{font-size:0.9em;opacity:.95;margin-top:6px}
-    .overlayMark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:44px;pointer-events:none;opacity:0.55}
-    .overlayMark.x{color:rgba(222,36,36,0.78)}
-    .overlayMark.o{color:rgba(42,142,42,0.78)}
-
-    .line-layer{position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;z-index:2}
-    .lineOverlay{position:absolute;pointer-events:none;border-radius:6px}
-
-    /* glow for doubled cells */
-    .glow{animation:glow 1s ease-in-out infinite alternate}
-    @keyframes glow{from{box-shadow:0 0 10px rgba(255,215,0,0.6)}to{box-shadow:0 0 18px rgba(255,215,0,0.95)}}
-
-    /* rarity colours */
-    .very-common{background:linear-gradient(#fff7d9,#ffe89c)}
-    .common{background:linear-gradient(#ffffff,#f5f5f7)}
-    .uncommon{background:linear-gradient(#e6ffdc,#b7f08a)}
-    .rare{background:linear-gradient(#d9f0ff,#7ecaff)}
-    .super-rare{background:linear-gradient(#f0dbff,#b98aff)}
-
-    .legend{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
-    .legend .key{padding:8px;border-radius:6px;font-weight:700;display:flex;gap:8px;align-items:center}
-    .muted{color:#666;font-size:13px}
-    .meta{margin-top:12px;color:#444}
-
-    @media (max-width:900px){.row{flex-direction:column}.leftcol{width:auto}.grid-wrap{flex-direction:column}}
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>Randomiser tournament tracker</h1>
-
-    <div class="stage" id="step1">
-      <div class="small muted">Step 1 — Enter team names and optional sound URLs</div>
-      <label>Team X name</label>
-      <input id="teamXName" type="text" placeholder="Team X" value="Team X" />
-      <label>Team O name</label>
-      <input id="teamOName" type="text" placeholder="Team O" value="Team O" />
-
-      <label style="margin-top:10px">Sound URL for when X marks a cell</label>
-      <input id="soundXUrl" type="text" placeholder="https://example.com/x-sound.mp3" />
-      <label>Sound URL for when O marks a cell</label>
-      <input id="soundOUrl" type="text" placeholder="https://example.com/o-sound.mp3" />
-      <label>Sound URL for when a line is completed</label>
-      <input id="soundLineUrl" type="text" placeholder="https://example.com/line-sound.mp3" />
-
-      <div style="margin-top:12px;text-align:right">
-        <button class="btn" id="toStep2">Next</button>
-      </div>
-    </div>
-
-    <div class="stage" id="step2" style="display:none">
-      <div class="small muted">Step 2 — Paste the card text here (items + rarities). The parser accepts formats like "ITEM\tRarity" per cell or alternating lines. Underscores will be converted to spaces automatically.</div>
-      <label>Paste card</label>
-      <textarea id="cardInput" placeholder="PASTE CARD TEXT (ITEM then RARITY, etc)"></textarea>
-      <div style="margin-top:8px;text-align:right">
-        <button class="btn" id="parseBtn">Done</button>
-      </div>
-    </div>
-
-    <div class="stage" id="viewer" style="display:none">
-      <div class="row" style="align-items:center;margin-bottom:8px">
-        <div class="leftcol score-box" id="scoreLeft">
-          <h3 id="teamXDisplay">Team X</h3>
-          <div style="font-size:36px;font-weight:800;color:#c33" id="scoreX">0</div>
-        </div>
-
-        <div class="center">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <div class="muted">Click a cell to cycle: X → O → none</div>
-            <div>
-              <button class="btn" id="resetMarks">Reset marks</button>
-              <button class="btn" id="exportBtn" style="margin-left:6px;background:#27ae60">Export card text</button>
-            </div>
-          </div>
-
-          <div class="grid-wrap">
-            <div id="gridContainer" class="grid-root" style="flex:1;min-width:200px"></div>
-          </div>
-
-        </div>
-
-        <div class="leftcol score-box" id="scoreRight">
-          <h3 id="teamODisplay">Team O</h3>
-          <div style="font-size:36px;font-weight:800;color:#2a8f2a" id="scoreO">0</div>
-        </div>
-      </div>
-
-      <div class="legend" id="legend"></div>
-      <div class="meta">Card size: <span id="cardSize"></span> — Points: Very Common=1, Common=2, Uncommon=4, Rare=8, Super Rare=16. Lines double points for the team that completes them (each cell is doubled at most once).</div>
-    </div>
-  </div>
-
-<script>
-// rarities
-const RARITIES = {
-  'very common': {key:'Very Common',pts:1,cls:'very-common'},
-  'common': {key:'Common',pts:2,cls:'common'},
-  'uncommon': {key:'Uncommon',pts:4,cls:'uncommon'},
-  'rare': {key:'Rare',pts:8,cls:'rare'},
-  'super rare': {key:'Super Rare',pts:16,cls:'super-rare'}
-};
-
-let grid = [];
-let N = 0;
-let lines = {X:[], O:[]};
-let prevLines = {X:[], O:[]}; // to detect new lines (for sound)
-let audioX = null, audioO = null, audioLine = null;
-
-function normalizeRarity(s){
-  if(!s) return null;
-  s = s.trim().toLowerCase();
-  // normalize underscores and extra spaces
-  s = s.replace(/_/g,' ').replace(/\s+/g,' ').trim();
-  // direct match
-  if(RARITIES[s]) return s;
-  // exact phrase checks
-  if(s === 'very common') return 'very common';
-  if(s === 'super rare') return 'super rare';
-  if(s === 'uncommon') return 'uncommon';
-  if(s === 'rare') return 'rare';
-  if(s === 'common') return 'common';
-  // fuzzy checks
-  if(s.includes('very') && s.includes('common')) return 'very common';
-  if(s.includes('super') && s.includes('rare')) return 'super rare';
-  if(s.includes('uncommon')) return 'uncommon';
-  if(s.includes('rare')) return 'rare';
-  if(s.includes('common')) return 'common';
-  return null;
+const res=[];
+for(let r=0;r<N;r++){ let ok=true; for(let c=0;c<N;c++){ if(grid[r][c].mark !== team){ ok=false; break;} } if(ok) res.push({type:'row',i:r}); }
+for(let c=0;c<N;c++){ let ok=true; for(let r=0;r<N;r++){ if(grid[r][c].mark !== team){ ok=false; break;} } if(ok) res.push({type:'col',i:c}); }
+let ok=true; for(let i=0;i<N;i++){ if(grid[i][i].mark !== team){ ok=false; break;} } if(ok) res.push({type:'diag',which:0});
+ok=true; for(let i=0;i<N;i++){ if(grid[i][N-1-i].mark !== team){ ok=false; break;} } if(ok) res.push({type:'diag',which:1});
+return res;
 }
 
-function parseCardText(text){
-  const linesIn = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
-  const items = [];
-  let i = 0;
-  while(i < linesIn.length){
-    const line = linesIn[i];
-    const parts = line.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
-
-    // If line contains pairs like ITEM<ws>RARITY ITEM<ws>RARITY ...
-    if(parts.length >= 2){
-      for(let j=0;j<parts.length;j+=2){ items.push({item:parts[j], rarityRaw:parts[j+1]||''}); }
-      i++; continue;
-    }
-
-    const single = parts[0];
-    // If the single token itself is a rarity, attach to previous item if possible
-    const maybeR = normalizeRarity(single);
-    if(maybeR){ if(items.length>0 && !items[items.length-1].rarityRaw) items[items.length-1].rarityRaw = single; i++; continue; }
-
-    // Look ahead: next line might contain a rarity; it could be one or two tokens (e.g. 'Very Common')
-    let next = linesIn[i+1] || '';
-    let nextParts = next.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
-    if(nextParts.length > 0){
-      // try two-word rarity first
-      let two = null;
-      if(nextParts.length > 1) two = (nextParts[0] + ' ' + nextParts[1]);
-      const maybeTwo = two ? normalizeRarity(two) : null;
-      const maybeOne = normalizeRarity(nextParts[0]);
-      if(maybeTwo){ items.push({item:single, rarityRaw: two}); i+=2; continue; }
-      if(maybeOne){ items.push({item:single, rarityRaw: nextParts[0]}); i+=2; continue; }
-    }
-
-    // fallback: treat current line as item with empty rarity
-    items.push({item:single, rarityRaw:''}); i++;
-  }
-
-  // fallback tokenisation if needed
-  if(!Number.isInteger(Math.sqrt(items.length))){
-    const tokens = text.split(/\s+/).filter(Boolean);
-    const list = [];
-    for(let k=0;k<tokens.length;){
-      const t = tokens[k];
-      const maybeR = normalizeRarity(tokens[k+1] || '');
-      if(maybeR){ list.push({item:t, rarityRaw:tokens[k+1]}); k+=2; }
-      else { let j=k+1; let found=null; while(j<tokens.length){ if(normalizeRarity(tokens[j])){ found=tokens[j]; break; } j++; } if(found){ list.push({item:t, rarityRaw:found}); k=j+1; } else { list.push({item:t, rarityRaw:''}); k++; } }
-    }
-    if(Number.isInteger(Math.sqrt(list.length))){ return list.map(x=>({item:formatItemName(x.item), rarity:normalizeRarity(x.rarityRaw)||'common'})); }
-  }
-
-  return items.map(x=>({item:formatItemName(x.item), rarity:normalizeRarity(x.rarityRaw)||'common'}));
-}
-
-function formatItemName(name){ if(!name) return ''; // replace underscores with spaces and collapse multiple spaces
-  return name.replace(/_/g,' ').replace(/\s+/g,' ').trim(); }
-
-function buildGridFromPairs(pairs){
-  const count = pairs.length; const size = Math.sqrt(count);
-  if(!Number.isInteger(size) || size < 1 || size > 10) return null;
-  N = size; grid = [];
-  for(let r=0;r<N;r++){ const row = []; for(let c=0;c<N;c++){ const p = pairs[r*N + c]; const rar = (p && p.rarity) ? p.rarity : 'common'; const meta = RARITIES[rar] || RARITIES['common']; row.push({item:(p && p.item) ? p.item : '', rarityKey:rar, basePts:meta.pts, mark:null}); } grid.push(row); }
-  return grid;
-}
-
-function renderGrid(){
-  const container = document.getElementById('gridContainer'); container.innerHTML = '';
-  const root = document.createElement('div'); root.className = 'grid-root';
-
-  // determine a comfortable cell size so full words fit and grid is square looking
-  const maxTotal = 760; const perCellMax = 160; const total = Math.min(maxTotal, Math.max(N*90, N*perCellMax)); const cellSize = Math.floor(total / N);
-
-  const gridEl = document.createElement('div'); gridEl.className = 'grid';
-  gridEl.style.gridTemplateColumns = `repeat(${N}, ${cellSize}px)`;
-  gridEl.style.gridAutoRows = `${Math.floor(cellSize*0.95)}px`;
-  gridEl.style.width = total + 'px';
-
-  // dynamic font sizing: for big grids reduce font slightly so text fits
-  // compute baseFont (px)
-  let baseFont = 13;
-  if(N >= 8) baseFont = 11;       // 8x8..10x10 -> smaller font
-  else if(N === 7) baseFont = 12;
-  gridEl.style.setProperty('--cell-font-size', baseFont + 'px');
-
-  for(let r=0;r<N;r++){
-    for(let c=0;c<N;c++){
-      const cell = grid[r][c];
-      const el = document.createElement('div'); el.className = 'cell ' + RARITIES[cell.rarityKey].cls; el.dataset.r=r; el.dataset.c=c;
-      const itemEl = document.createElement('div'); itemEl.className='item'; itemEl.textContent = cell.item;
-      const rarityEl = document.createElement('div'); rarityEl.className='rarity'; rarityEl.textContent = RARITIES[cell.rarityKey].key;
-      const ptsEl = document.createElement('div'); ptsEl.className='points'; ptsEl.textContent = cell.basePts + ' pts';
-      el.appendChild(itemEl); el.appendChild(rarityEl); el.appendChild(ptsEl);
-      const mark = document.createElement('div'); mark.className='overlayMark'; el.appendChild(mark);
-      el.addEventListener('click', ()=>{ toggleMark(r,c); renderEverything(); });
-      gridEl.appendChild(el);
-    }
-  }
-
-  const lineLayer = document.createElement('div'); lineLayer.className = 'line-layer';
-  root.appendChild(gridEl); root.appendChild(lineLayer); container.appendChild(root);
-}
-
-function toggleMark(r,c){ const cur = grid[r][c].mark; if(cur === null) { grid[r][c].mark = 'X'; playAudio('X'); } else if(cur === 'X'){ grid[r][c].mark = 'O'; playAudio('O'); } else { grid[r][c].mark = null; } }
-
-function playAudio(which){ try{ if(which==='X' && audioX) { audioX.currentTime = 0; audioX.play(); } if(which==='O' && audioO) { audioO.currentTime = 0; audioO.play(); } }catch(e){} }
-function playLineAudio(){ try{ if(audioLine) { audioLine.currentTime = 0; audioLine.play(); } }catch(e){} }
-
-function getLinesForTeam(team){
-  const res=[];
-  for(let r=0;r<N;r++){ let ok=true; for(let c=0;c<N;c++){ if(grid[r][c].mark !== team){ ok=false; break;} } if(ok) res.push({type:'row',i:r}); }
-  for(let c=0;c<N;c++){ let ok=true; for(let r=0;r<N;r++){ if(grid[r][c].mark !== team){ ok=false; break;} } if(ok) res.push({type:'col',i:c}); }
-  let ok=true; for(let i=0;i<N;i++){ if(grid[i][i].mark !== team){ ok=false; break;} } if(ok) res.push({type:'diag',which:0});
-  ok=true; for(let i=0;i<N;i++){ if(grid[i][N-1-i].mark !== team){ ok=false; break;} } if(ok) res.push({type:'diag',which:1});
-  return res;
-}
 
 function arraysEqual(a,b){ if(a.length!==b.length) return false; const sa = JSON.stringify(a); const sb = JSON.stringify(b); return sa===sb; }
 
+
 function renderEverything(){
-  const gridRoot = document.querySelector('#gridContainer .grid-root'); if(!gridRoot) return; const gridEl = gridRoot.querySelector('.grid'); const lineLayer = gridRoot.querySelector('.line-layer');
-  const cells = gridEl.querySelectorAll('.cell');
-  cells.forEach(cellEl=>{ const r=parseInt(cellEl.dataset.r), c=parseInt(cellEl.dataset.c); const mEl=cellEl.querySelector('.overlayMark'); const mark=grid[r][c].mark; mEl.className='overlayMark'; if(mark==='X'){ mEl.classList.add('x'); mEl.textContent='X'; } else if(mark==='O'){ mEl.classList.add('o'); mEl.textContent='O'; } else { mEl.textContent=''; } cellEl.classList.remove('glow'); });
+const gridRoot = document.querySelector('#gridContainer .grid-root'); if(!gridRoot) return; const gridEl = gridRoot.querySelector('.grid'); const lineLayer = gridRoot.querySelector('.line-layer');
+const cells = gridEl.querySelectorAll('.cell');
+cells.forEach(cellEl=>{ const r=parseInt(cellEl.dataset.r), c=parseInt(cellEl.dataset.c); const mEl=cellEl.querySelector('.overlayMark'); const mark=grid[r][c].mark; mEl.className='overlayMark'; if(mark==='X'){ mEl.classList.add('x'); mEl.textContent='X'; } else if(mark==='O'){ mEl.classList.add('o'); mEl.textContent='O'; } else { mEl.textContent=''; } cellEl.classList.remove('glow'); });
 
-  // compute completed lines
-  lines.X = getLinesForTeam('X'); lines.O = getLinesForTeam('O');
 
-  // detect newly completed lines to play sound once
-  const newX = !arraysEqual(lines.X, prevLines.X);
-  const newO = !arraysEqual(lines.O, prevLines.O);
+// compute completed lines
+lines.X = getLinesForTeam('X'); lines.O = getLinesForTeam('O');
 
-  // clear overlays
-  lineLayer.innerHTML = '';
 
-  // map whether cell is in any completed line for a team (non-stacking)
-  const inLine = {};
-  for(let r=0;r<N;r++) for(let c=0;c<N;c++) inLine[`${r},${c}`] = {X:false,O:false};
+// detect newly completed lines to play sound once
+const newX = !arraysEqual(lines.X, prevLines.X);
+const newO = !arraysEqual(lines.O, prevLines.O);
 
-  ['X','O'].forEach(team=>{ (lines[team]||[]).forEach(ln=>{
-    if(ln.type==='row'){ const r=ln.i; for(let c=0;c<N;c++) inLine[`${r},${c}`][team]=true; drawRowOverlay(r,team); }
-    else if(ln.type==='col'){ const c=ln.i; for(let r=0;r<N;r++) inLine[`${r},${c}`][team]=true; drawColOverlay(c,team); }
-    else if(ln.type==='diag'){ if(ln.which===0){ for(let i=0;i<N;i++) inLine[`${i},${i}`][team]=true; drawDiagOverlay(0,team);} else { for(let i=0;i<N;i++) inLine[`${i},${N-1-i}`][team]=true; drawDiagOverlay(1,team);} }
-  }); });
 
-  // apply glow to any marked cell that is doubled
-  for(let r=0;r<N;r++){
-    for(let c=0;c<N;c++){
-      const key = `${r},${c}`; const el = gridEl.children[r*N + c]; if(!el) continue;
-      if(grid[r][c].mark === 'X' && inLine[key].X) el.classList.add('glow');
-      if(grid[r][c].mark === 'O' && inLine[key].O) el.classList.add('glow');
-    }
-  }
+// clear overlays
+lineLayer.innerHTML = '';
 
-  // compute scores (doubling at most once)
-  let scoreX = 0, scoreO = 0;
-  for(let r=0;r<N;r++){
-    for(let c=0;c<N;c++){
-      const cell = grid[r][c]; const key=`${r},${c}`; const mark = cell.mark;
-      if(mark === 'X'){ const multiplier = inLine[key].X ? 2 : 1; scoreX += cell.basePts * multiplier; }
-      else if(mark === 'O'){ const multiplier = inLine[key].O ? 2 : 1; scoreO += cell.basePts * multiplier; }
-      const ptsEl = gridEl.children[r*N+c].querySelector('.points'); let eff = cell.basePts; if(mark==='X' && inLine[key].X) eff = cell.basePts*2; if(mark==='O' && inLine[key].O) eff = cell.basePts*2; ptsEl.textContent = eff + ' pts';
-    }
-  }
 
-  document.getElementById('scoreX').textContent = scoreX; document.getElementById('scoreO').textContent = scoreO;
+// map whether cell is in any completed line for a team (non-stacking)
+const inLine = {};
+for(let r=0;r<N;r++) for(let c=0;c<N;c++) inLine[`${r},${c}`] = {X:false,O:false};
 
-  // play line sound if new lines detected
-  if((newX || newO) && (lines.X.length + lines.O.length) > 0){ playLineAudio(); }
 
-  // store current as prev for next render
-  prevLines.X = JSON.parse(JSON.stringify(lines.X)); prevLines.O = JSON.parse(JSON.stringify(lines.O));
+['X','O'].forEach(team=>{ (lines[team]||[]).forEach(ln=>{
+if(ln.type==='row'){ const r=ln.i; for(let c=0;c<N;c++) inLine[`${r},${c}`][team]=true; drawRowOverlay(r,team); }
+else if(ln.type==='col'){ const c=ln.i; for(let r=0;r<N;r++) inLine[`${r},${c}`][team]=true; drawColOverlay(c,team); }
+else if(ln.type==='diag'){ if(ln.which===0){ for(let i=0;i<N;i++) inLine[`${i},${i}`][team]=true; drawDiagOverlay(0,team);} else { for(let i=0;i<N;i++) inLine[`${i},${N-1-i}`][team]=true; drawDiagOverlay(1,team);} }
+}); });
+
+
+// apply glow to any marked cell that is doubled
+for(let r=0;r<N;r++){
+for(let c=0;c<N;c++){
+const key = `${r},${c}`; const el = gridEl.children[r*N + c]; if(!el) continue;
+if(grid[r][c].mark === 'X' && inLine[key].X) el.classList.add('glow');
+if(grid[r][c].mark === 'O' && inLine[key].O) el.classList.add('glow');
 }
+}
+
+
+// compute scores (doubling at most once)
+let scoreX = 0, scoreO = 0;
+for(let r=0;r<N;r++){
+for(let c=0;c<N;c++){
+const cell = grid[r][c]; const key=`${r},${c}`; const mark = cell.mark;
+if(mark === 'X'){ const multiplier = inLine[key].X ? 2 : 1; scoreX += cell.basePts * multiplier; }
+else if(mark === 'O'){ const multiplier = inLine[key].O ? 2 : 1; scoreO += cell.basePts * multiplier; }
+const ptsEl = gridEl.children[r*N+c].querySelector('.points'); let eff = cell.basePts; if(mark==='X' && inLine[key].X) eff = cell.basePts*2; if(mark==='O' && inLine[key].O) eff = cell.basePts*2; ptsEl.textContent = eff + ' pts';
+}
+}
+
+
+document.getElementById('scoreX').textContent = scoreX; document.getElementById('scoreO').textContent = scoreO;
+
+
+// play line sound if new lines detected
+if((newX || newO) && (lines.X.length + lines.O.length) > 0){ playLineAudio(); }
+
+
+// store current as prev for next render
+prevLines.X = JSON.parse(JSON.stringify(lines.X)); prevLines.O = JSON.parse(JSON.stringify(lines.O));
+}
+
 
 // overlay drawing helpers — precise bounding boxes
 function drawRowOverlay(r,team){ const root = document.querySelector('#gridContainer .grid-root'); const gridEl = root.querySelector('.grid'); const lineLayer = root.querySelector('.line-layer'); const first = gridEl.children[r*N + 0].getBoundingClientRect(); const last = gridEl.children[r*N + (N-1)].getBoundingClientRect(); const gridRect = gridEl.getBoundingClientRect(); const left = first.left - gridRect.left; const top = first.top - gridRect.top; const width = last.right - first.left; const height = first.height; const div = document.createElement('div'); div.className='lineOverlay'; div.style.left = left + 'px'; div.style.top = top + 'px'; div.style.width = width + 'px'; div.style.height = height + 'px'; div.style.background = team==='X' ? 'rgba(221,68,68,0.28)' : 'rgba(42,142,42,0.28)'; lineLayer.appendChild(div); }
 function drawColOverlay(c,team){ const root = document.querySelector('#gridContainer .grid-root'); const gridEl = root.querySelector('.grid'); const lineLayer = root.querySelector('.line-layer'); const first = gridEl.children[0*N + c].getBoundingClientRect(); const last = gridEl.children[(N-1)*N + c].getBoundingClientRect(); const gridRect = gridEl.getBoundingClientRect(); const left = first.left - gridRect.left; const top = first.top - gridRect.top; const width = first.width; const height = (last.bottom - first.top); const div = document.createElement('div'); div.className='lineOverlay'; div.style.left = left + 'px'; div.style.top = top + 'px'; div.style.width = width + 'px'; div.style.height = height + 'px'; div.style.background = team==='X' ? 'rgba(221,68,68,0.28)' : 'rgba(42,142,42,0.28)'; lineLayer.appendChild(div); }
 function drawDiagOverlay(which,team){ const root = document.querySelector('#gridContainer .grid-root'); const gridEl = root.querySelector('.grid'); const lineLayer = root.querySelector('.line-layer'); const gridRect = gridEl.getBoundingClientRect(); const a = which===0 ? gridEl.children[0].getBoundingClientRect() : gridEl.children[N-1].getBoundingClientRect(); const b = which===0 ? gridEl.children[(N-1)*N + (N-1)].getBoundingClientRect() : gridEl.children[(N-1)*N + 0].getBoundingClientRect(); const svgNS='http://www.w3.org/2000/svg'; const svg = document.createElementNS(svgNS,'svg'); svg.setAttribute('width', gridRect.width); svg.setAttribute('height', gridRect.height); svg.style.position='absolute'; svg.style.left='0'; svg.style.top='0'; const line = document.createElementNS(svgNS,'line'); const ax = (a.left - gridRect.left) + a.width/2; const ay = (a.top - gridRect.top) + a.height/2; const bx = (b.left - gridRect.left) + b.width/2; const by = (b.top - gridRect.top) + b.height/2; line.setAttribute('x1',ax); line.setAttribute('y1',ay); line.setAttribute('x2',bx); line.setAttribute('y2',by); line.setAttribute('stroke', team==='X' ? 'rgba(221,68,68,0.35)' : 'rgba(42,142,42,0.35)'); line.setAttribute('stroke-width', Math.max(10, Math.min(36, Math.min(a.width,a.height)*0.6))); line.setAttribute('stroke-linecap','round'); svg.appendChild(line); svg.classList.add('lineOverlay'); lineLayer.appendChild(svg); }
 
+
 // UI wiring
 document.getElementById('toStep2').addEventListener('click', ()=>{ document.getElementById('step1').style.display='none'; document.getElementById('step2').style.display='block'; });
 
+
 // parse and render
 document.getElementById('parseBtn').addEventListener('click', ()=>{
-  // load sounds from inputs
-  const sx = document.getElementById('soundXUrl').value.trim(); const so = document.getElementById('soundOUrl').value.trim(); const sl = document.getElementById('soundLineUrl').value.trim(); audioX = sx ? new Audio(sx) : null; audioO = so ? new Audio(so) : null; audioLine = sl ? new Audio(sl) : null;
+// load sounds from inputs
+const sx = document.getElementById('soundXUrl').value.trim(); const so = document.getElementById('soundOUrl').value.trim(); const sl = document.getElementById('soundLineUrl').value.trim(); audioX = sx ? new Audio(sx) : null; audioO = so ? new Audio(so) : null; audioLine = sl ? new Audio(sl) : null;
 
-  const teamX = document.getElementById('teamXName').value || 'Team X'; const teamO = document.getElementById('teamOName').value || 'Team O'; document.getElementById('teamXDisplay').textContent = teamX; document.getElementById('teamODisplay').textContent = teamO;
-  const text = document.getElementById('cardInput').value.trim(); if(!text){ alert('Please paste card text.'); return; }
-  const pairs = parseCardText(text);
-  const built = buildGridFromPairs(pairs);
-  if(!built){ alert('Could not parse a square card from the text. Make sure the total number of cells is a perfect square (1x1 .. 10x10).'); return; }
-  document.getElementById('cardSize').textContent = N + ' x ' + N;
 
-  // legend
-  const legend = document.getElementById('legend'); legend.innerHTML='';
-  for(const key of ['very common','common','uncommon','rare','super rare']){ const d=document.createElement('div'); d.className='key '+RARITIES[key].cls; d.style.padding='8px'; d.textContent = RARITIES[key].key + ' — ' + RARITIES[key].pts + ' pts'; legend.appendChild(d); }
+const teamX = document.getElementById('teamXName').value || 'Team X'; const teamO = document.getElementById('teamOName').value || 'Team O'; document.getElementById('teamXDisplay').textContent = teamX; document.getElementById('teamODisplay').textContent = teamO;
+const text = document.getElementById('cardInput').value.trim(); if(!text){ alert('Please paste card text.'); return; }
+const pairs = parseCardText(text);
+const built = buildGridFromPairs(pairs);
+if(!built){ alert('Could not parse a square card from the text. Make sure the total number of cells is a perfect square (1x1 .. 10x10).'); return; }
+document.getElementById('cardSize').textContent = N + ' x ' + N;
 
-  document.getElementById('step2').style.display='none'; document.getElementById('viewer').style.display='block';
-  renderGrid(); requestAnimationFrame(()=>{ renderEverything(); });
+
+// legend
+const legend = document.getElementById('legend'); legend.innerHTML='';
+for(const key of ['very common','common','uncommon','rare','super rare']){ const d=document.createElement('div'); d.className='key '+RARITIES[key].cls; d.style.padding='8px'; d.textContent = RARITIES[key].key + ' — ' + RARITIES[key].pts + ' pts'; legend.appendChild(d); }
+
+
+document.getElementById('step2').style.display='none'; document.getElementById('viewer').style.display='block';
+renderGrid(); requestAnimationFrame(()=>{ renderEverything(); });
 });
+
 
 // reset marks
 document.getElementById('resetMarks').addEventListener('click', ()=>{ for(let r=0;r<N;r++) for(let c=0;c<N;c++) grid[r][c].mark = null; renderEverything(); });
 
+
 // export
 document.getElementById('exportBtn').addEventListener('click', ()=>{
-  const flat = [];
-  for(let r=0;r<N;r++) for(let c=0;c<N;c++){ const cell = grid[r][c]; flat.push((cell.item||'') + '\n' + RARITIES[cell.rarityKey].key); }
-  prompt('Copy the card text below (paste back into the importer to recreate the card):', flat.join('\n'));
+const flat = [];
+for(let r=0;r<N;r++) for(let c=0;c<N;c++){ const cell = grid[r][c]; flat.push((cell.item||'') + '\n' + RARITIES[cell.rarityKey].key); }
+prompt('Copy the card text below (paste back into the importer to recreate the card):', flat.join('\n'));
 });
 </script>
 </body>
