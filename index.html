@@ -70,7 +70,7 @@
     </div>
 
     <div class="stage" id="step2" style="display:none">
-      <div class="small muted">Step 2 — Paste the card text here (items + rarities). The parser accepts formats like "ITEM\tRarity" per cell or alternating lines. Underscores will be converted to spaces automatically.</div>
+      <div class="small muted">Step 2 — Paste the card text here (items + rarities). The parser accepts many formats: ITEM [tab] RARITY, RARITY [tab] ITEM, or ITEM then next-line RARITY. Underscores will be converted to spaces automatically.</div>
       <label>Paste card</label>
       <textarea id="cardInput" placeholder="PASTE CARD TEXT (ITEM then RARITY, etc)"></textarea>
       <div style="margin-top:8px;text-align:right">
@@ -129,17 +129,16 @@ let prevLines = {X:[], O:[]};
 // Normalise rarities and prioritise two-word rarities like "very common"
 function normalizeRarity(s){
   if(!s) return null;
-  // sanitize
-  s = s.trim().toLowerCase();
+  s = String(s).trim().toLowerCase();
   s = s.replace(/_/g,' ').replace(/\s+/g,' ').trim();
-  // PRIORITY: two-word exact matches first
+  // two-word priority
   if(s === 'very common') return 'very common';
   if(s === 'super rare') return 'super rare';
-  // then single-word exacts
+  // single words
   if(s === 'uncommon') return 'uncommon';
   if(s === 'rare') return 'rare';
   if(s === 'common') return 'common';
-  // fuzzy fallback (still prefer 'very common' if both words present)
+  // fuzzy fallback (still prefer very common)
   if(s.includes('very') && s.includes('common')) return 'very common';
   if(s.includes('super') && s.includes('rare')) return 'super rare';
   if(s.includes('uncommon')) return 'uncommon';
@@ -150,10 +149,18 @@ function normalizeRarity(s){
 
 function formatItemName(name){
   if(!name) return '';
-  return name.replace(/_/g,' ').replace(/\s+/g,' ').trim();
+  return String(name).replace(/_/g,' ').replace(/\s+/g,' ').trim();
 }
 
-// Parsing: accepts "ITEM   RARITY" pairs on same line, or ITEM then next-line rarity (including two-word rarities)
+/* --------- Improved parsing that handles:
+   - ITEM [tab/2+spaces] RARITY
+   - RARITY [tab/2+spaces] ITEM
+   - ITEM on one line, RARITY on next line (including two-word rarities)
+   The logic:
+     - For paired tokens, check which token normalises to a rarity.
+     - If both tokens look like rarities, choose the best (very common > common).
+     - If neither token is a rarity, assume the 2nd token is the rarity (fallback).
+*/
 function parseCardText(text){
   const linesIn = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
   const items = [];
@@ -162,37 +169,73 @@ function parseCardText(text){
     const line = linesIn[i];
     const parts = line.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
     if(parts.length >= 2){
+      // process pairs within the line
       for(let j=0;j<parts.length;j+=2){
-        items.push({item:parts[j], rarityRaw:parts[j+1]||''});
+        const a = parts[j] || '';
+        const b = parts[j+1] || '';
+        const ra = normalizeRarity(a);
+        const rb = normalizeRarity(b);
+        // if b is a rarity and a is not -> a = item, b = rarity
+        if(rb && !ra){
+          items.push({item:a, rarityRaw:b});
+        }
+        // if a is a rarity and b is not -> b = item, a = rarity
+        else if(ra && !rb){
+          items.push({item:b, rarityRaw:a});
+        }
+        // if both are rarities -> prefer more specific (very common > common), but we still need an item:
+        else if(ra && rb){
+          // pick the stronger rarity for the rarity field
+          const chooseR = (ra === 'very common' || rb === 'common') ? ra : (rb === 'very common' ? rb : ra);
+          // whichever token isn't the chosen rarity becomes the item (if possible)
+          if(chooseR === ra){
+            items.push({item:b, rarityRaw:a});
+          } else {
+            items.push({item:a, rarityRaw:b});
+          }
+        }
+        // neither token is recognized as rarity -> assume a=item b=rarity (fallback)
+        else {
+          items.push({item:a, rarityRaw:b});
+        }
       }
       i++; continue;
     }
+
+    // single token line — could be item or a rarity line for previous item
     const single = parts[0];
-    // if single is a rarity, attach to previous item if available
     const maybeR = normalizeRarity(single);
     if(maybeR){
-      if(items.length>0 && !items[items.length-1].rarityRaw){
+      if(items.length > 0 && !items[items.length-1].rarityRaw){
         items[items.length-1].rarityRaw = single;
       }
       i++; continue;
     }
-    // lookahead: next line might be rarity (one- or two-token)
+
+    // lookahead: next line might be rarity (one or two tokens)
     const next = linesIn[i+1] || '';
     const nextParts = next.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
-    if(nextParts.length>0){
+    if(nextParts.length > 0){
       let two = null;
-      if(nextParts.length>1) two = (nextParts[0] + ' ' + nextParts[1]);
+      if(nextParts.length > 1) two = (nextParts[0] + ' ' + nextParts[1]);
       const maybeTwo = two ? normalizeRarity(two) : null;
       const maybeOne = normalizeRarity(nextParts[0]);
-      if(maybeTwo){ items.push({item:single, rarityRaw:two}); i+=2; continue; }
-      if(maybeOne){ items.push({item:single, rarityRaw:nextParts[0]}); i+=2; continue; }
+      if(maybeTwo){
+        items.push({item:single, rarityRaw: two});
+        i+=2; continue;
+      }
+      if(maybeOne){
+        items.push({item:single, rarityRaw: nextParts[0]});
+        i+=2; continue;
+      }
     }
-    // fallback: item only
+
+    // fallback: treat current line as item with empty rarity
     items.push({item:single, rarityRaw:''});
     i++;
   }
 
-  // fallback tokenization if item count isn't a square
+  // fallback tokenisation if count not square
   if(!Number.isInteger(Math.sqrt(items.length))){
     const tokens = text.split(/\s+/).filter(Boolean);
     const list = [];
@@ -212,6 +255,8 @@ function parseCardText(text){
 
   return items.map(x=>({item:formatItemName(x.item), rarity:normalizeRarity(x.rarityRaw)||'common'}));
 }
+
+/* ---------- grid build & render (unchanged behaviour otherwise) ---------- */
 
 function buildGridFromPairs(pairs){
   const count = pairs.length;
@@ -235,7 +280,7 @@ function renderGrid(){
   const container = document.getElementById('gridContainer');
   container.innerHTML='';
 
-  // determine grid total width and cell size (reliable fixed pixel approach)
+  // determine grid widths (reverted to robust fixed-per-cell approach)
   const maxTotal = 760;
   const perCellMax = 160;
   const total = Math.min(maxTotal, Math.max(N*80, N*perCellMax));
@@ -469,7 +514,6 @@ document.getElementById('parseBtn').addEventListener('click', ()=>{
   document.getElementById('step2').style.display='none';
   document.getElementById('viewer').style.display='block';
   renderGrid();
-  // wait for layout to stabilise then draw overlays
   requestAnimationFrame(()=>{ renderEverything(); });
 });
 
