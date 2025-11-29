@@ -160,36 +160,28 @@ function formatItemName(name){
   return String(name).replace(/_/g,' ').replace(/\s+/g,' ').trim();
 }
 
-/* Improved paired-token handler:
-   When a line has two tokens (A and B), detect whether A or B (or both) look like rarities.
-   - If only one is a rarity, use that as rarity and the other as item.
-   - If both are rarities, pick the higher-ranked rarity and treat the other as item (best-effort).
-   - If neither is a rarity, fallback to A=item, B=rarity (legacy fallback).
-*/
+// Pair token handler
 function handlePairTokens(a,b){
   const ra = normalizeRarity(a);
   const rb = normalizeRarity(b);
   if(rb && !ra) return {item:a, rarityRaw:b};
   if(ra && !rb) return {item:b, rarityRaw:a};
   if(ra && rb){
-    // pick the stronger rarity by rank
     const rankA = RARITY_RANK[ra] || 0;
     const rankB = RARITY_RANK[rb] || 0;
     if(rankA >= rankB) return {item:b, rarityRaw:a};
     else return {item:a, rarityRaw:b};
   }
-  // fallback: assume a=item b=rarity
   return {item:a, rarityRaw:b};
 }
 
 function parseCardText(text){
   const linesIn = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
   const items = [];
-  let i = 0;
+  let i=0;
   while(i < linesIn.length){
     const line = linesIn[i];
     const parts = line.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
-
     if(parts.length >= 2){
       for(let j=0;j<parts.length;j+=2){
         const a = parts[j]||'', b = parts[j+1]||'';
@@ -198,16 +190,12 @@ function parseCardText(text){
       }
       i++; continue;
     }
-
     const single = parts[0];
     const maybeRsingle = normalizeRarity(single);
     if(maybeRsingle){
-      if(items.length > 0 && !items[items.length-1].rarityRaw){
-        items[items.length-1].rarityRaw = single;
-      }
+      if(items.length > 0 && !items[items.length-1].rarityRaw) items[items.length-1].rarityRaw = single;
       i++; continue;
     }
-
     // lookahead for next-line rarity (one or two tokens)
     const next = linesIn[i+1] || '';
     const nextParts = next.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
@@ -216,11 +204,9 @@ function parseCardText(text){
       if(nextParts.length > 1) two = (nextParts[0] + ' ' + nextParts[1]);
       const maybeTwo = two ? normalizeRarity(two) : null;
       const maybeOne = normalizeRarity(nextParts[0]);
-      if(maybeTwo){ items.push({item:single, rarityRaw:two}); i+=2; continue; }
-      if(maybeOne){ items.push({item:single, rarityRaw:nextParts[0]}); i+=2; continue; }
+      if(maybeTwo){ items.push({item:single, rarityRaw: two}); i+=2; continue; }
+      if(maybeOne){ items.push({item:single, rarityRaw: nextParts[0]}); i+=2; continue; }
     }
-
-    // fallback
     items.push({item:single, rarityRaw:''});
     i++;
   }
@@ -243,10 +229,12 @@ function parseCardText(text){
     if(Number.isInteger(Math.sqrt(list.length))) return list.map(x=>({item:formatItemName(x.item), rarity:normalizeRarity(x.rarityRaw)||'common'}));
   }
 
-  return items.map(x=>({item:formatItemName(x.item), rarity:normalizeRarity(x.rarityRaw)||'common'}));
+  // Map to normalized rarity but keep raw for defensive adjustment
+  return items.map(x=>({item:formatItemName(x.item), rarityRaw:(x.rarityRaw||''), rarity:normalizeRarity(x.rarityRaw)||'common'}));
 }
 
 function buildGridFromPairs(pairs){
+  // Defensive fix: if rarity parsed as 'common' but original raw contains 'very' -> force 'very common'
   const count = pairs.length;
   const size = Math.sqrt(count);
   if(!Number.isInteger(size) || size < 1 || size > 10) return null;
@@ -254,10 +242,15 @@ function buildGridFromPairs(pairs){
   for(let r=0;r<N;r++){
     const row=[];
     for(let c=0;c<N;c++){
-      const p = pairs[r*N + c];
-      const rar = (p && p.rarity) ? p.rarity : 'common';
-      const meta = RARITIES[rar] || RARITIES['common'];
-      row.push({item:(p && p.item) ? p.item : '', rarityKey:rar, basePts:meta.pts, mark:null});
+      const p = pairs[r*N + c] || {};
+      let rarKey = p.rarity || 'common';
+      const raw = (p.rarityRaw || '').toString().toLowerCase();
+      // defensive override: raw contains 'very' & 'common' -> force 'very common'
+      if((rarKey === 'common' || rarKey===null) && raw.includes('very') && raw.includes('common')) rarKey = 'very common';
+      // also if raw contains 'very_common' or 'very-common' etc
+      if((rarKey === 'common' || rarKey===null) && /very[_\-\s]*common/.test(raw)) rarKey = 'very common';
+      const meta = RARITIES[rarKey] || RARITIES['common'];
+      row.push({item:(p.item||''), rarityKey:rarKey, basePts:meta.pts, mark:null});
     }
     grid.push(row);
   }
@@ -266,7 +259,7 @@ function buildGridFromPairs(pairs){
 
 function renderGrid(){
   const container = document.getElementById('gridContainer');
-  container.innerHTML = '';
+  container.innerHTML='';
 
   const maxTotal = 760;
   const perCellMax = 160;
@@ -292,14 +285,13 @@ function renderGrid(){
       cellEl.dataset.r = r; cellEl.dataset.c = c;
 
       const itemEl = document.createElement('div'); itemEl.className='item'; itemEl.textContent = cell.item;
-      const rarityEl = document.createElement('div'); rarityEl.className='rarity'; rarityEl.textContent = RARITIES[cell.rarityKey].key;
+      const rarityEl = document.createElement('div'); rarityEl.className='rarity'; rarityEl.textContent = (RARITIES[cell.rarityKey]||RARITIES['common']).key;
       const pointsEl = document.createElement('div'); pointsEl.className='points'; pointsEl.textContent = cell.basePts + ' pts';
 
       cellEl.appendChild(itemEl); cellEl.appendChild(rarityEl); cellEl.appendChild(pointsEl);
       const mark = document.createElement('div'); mark.className='overlayMark'; cellEl.appendChild(mark);
 
       cellEl.addEventListener('click', ()=>{ cycleMark(r,c); renderEverything(); });
-
       gridEl.appendChild(cellEl);
     }
   }
@@ -348,9 +340,9 @@ function renderEverything(){
 
   ['X','O'].forEach(team=>{
     (lines[team]||[]).forEach(ln=>{
-      if(ln.type==='row'){ const r=ln.i; for(let c=0;c<N;c++) inLine[`${r},${c}`][team]=true; drawRowOverlay(r,team); }
-      else if(ln.type==='col'){ const c=ln.i; for(let r=0;r<N;r++) inLine[`${r},${c}`][team]=true; drawColOverlay(c,team); }
-      else if(ln.type==='diag'){ if(ln.which===0){ for(let i=0;i<N;i++) inLine[`${i},${i}`][team]=true; drawDiagOverlay(0,team);} else { for(let i=0;i<N;i++) inLine[`${i},${N-1-i}`][team]=true; drawDiagOverlay(1,team);} }
+      if(ln.type === 'row'){ const r=ln.i; for(let c=0;c<N;c++) inLine[`${r},${c}`][team]=true; drawRowOverlay(r,team); }
+      else if(ln.type === 'col'){ const c=ln.i; for(let r=0;r<N;r++) inLine[`${r},${c}`][team]=true; drawColOverlay(c,team); }
+      else if(ln.type === 'diag'){ if(ln.which===0){ for(let i=0;i<N;i++) inLine[`${i},${i}`][team]=true; drawDiagOverlay(0,team);} else { for(let i=0;i<N;i++) inLine[`${i},${N-1-i}`][team]=true; drawDiagOverlay(1,team);} }
     });
   });
 
@@ -384,7 +376,7 @@ function renderEverything(){
   prevLines.X = JSON.parse(JSON.stringify(lines.X)); prevLines.O = JSON.parse(JSON.stringify(lines.O));
 }
 
-// overlays (same as before)
+// overlays
 function drawRowOverlay(rowIndex, team){
   const container = document.getElementById('gridContainer');
   const root = container.querySelector('div'); if(!root) return;
@@ -458,7 +450,10 @@ document.getElementById('parseBtn').addEventListener('click', ()=>{
   document.getElementById('teamODisplay').textContent = teamO;
   const text = document.getElementById('cardInput').value.trim();
   if(!text){ alert('Please paste card text.'); return; }
-  const pairs = parseCardText(text);
+  // parse returns objects: {item, rarityRaw, rarity}
+  const parsed = parseCardText(text);
+  // convert to pairs in expected format for buildGridFromPairs (preserve rarityRaw)
+  const pairs = parsed.map(p => ({ item: p.item, rarityRaw: p.rarityRaw, rarity: p.rarity }));
   const built = buildGridFromPairs(pairs);
   if(!built){ alert('Could not parse a square card from the text. Make sure there are between 1 and 100 cells and the total is a perfect square (1x1 .. 10x10).'); return; }
   document.getElementById('cardSize').textContent = N+' x '+N;
@@ -482,7 +477,7 @@ document.getElementById('resetMarks').addEventListener('click', ()=>{ for(let r=
 // export
 document.getElementById('exportBtn').addEventListener('click', ()=>{
   const flat=[];
-  for(let r=0;r<N;r++) for(let c=0;c<N;c++){ const cell = grid[r][c]; flat.push(cell.item + '\n' + RARITIES[cell.rarityKey].key); }
+  for(let r=0;r<N;r++) for(let c=0;c<N;c++){ const cell = grid[r][c]; flat.push(cell.item + '\n' + (RARITIES[cell.rarityKey]||RARITIES['common']).key); }
   prompt('Copy the card text below (paste back into the importer to recreate the card):', flat.join('\n'));
 });
 </script>
