@@ -121,6 +121,15 @@ const RARITIES = {
   'super rare': {key:'Super Rare',pts:16,cls:'super-rare'}
 };
 
+// ranking for specificity — higher wins
+const RARITY_RANK = {
+  'super rare': 5,
+  'very common': 4,
+  'rare': 3,
+  'uncommon': 2,
+  'common': 1
+};
+
 let grid = [];
 let N = 0;
 let lines = {X:[], O:[]};
@@ -131,14 +140,13 @@ function normalizeRarity(s){
   if(!s) return null;
   s = String(s).trim().toLowerCase();
   s = s.replace(/_/g,' ').replace(/\s+/g,' ').trim();
-  // two-word priority
+  // exact matches first
   if(s === 'very common') return 'very common';
   if(s === 'super rare') return 'super rare';
-  // single words
   if(s === 'uncommon') return 'uncommon';
   if(s === 'rare') return 'rare';
   if(s === 'common') return 'common';
-  // fuzzy fallback (still prefer very common)
+  // fuzzy fallbacks
   if(s.includes('very') && s.includes('common')) return 'very common';
   if(s.includes('super') && s.includes('rare')) return 'super rare';
   if(s.includes('uncommon')) return 'uncommon';
@@ -152,67 +160,55 @@ function formatItemName(name){
   return String(name).replace(/_/g,' ').replace(/\s+/g,' ').trim();
 }
 
-/* --------- Improved parsing that handles:
-   - ITEM [tab/2+spaces] RARITY
-   - RARITY [tab/2+spaces] ITEM
-   - ITEM on one line, RARITY on next line (including two-word rarities)
-   The logic:
-     - For paired tokens, check which token normalises to a rarity.
-     - If both tokens look like rarities, choose the best (very common > common).
-     - If neither token is a rarity, assume the 2nd token is the rarity (fallback).
+/* Improved paired-token handler:
+   When a line has two tokens (A and B), detect whether A or B (or both) look like rarities.
+   - If only one is a rarity, use that as rarity and the other as item.
+   - If both are rarities, pick the higher-ranked rarity and treat the other as item (best-effort).
+   - If neither is a rarity, fallback to A=item, B=rarity (legacy fallback).
 */
+function handlePairTokens(a,b){
+  const ra = normalizeRarity(a);
+  const rb = normalizeRarity(b);
+  if(rb && !ra) return {item:a, rarityRaw:b};
+  if(ra && !rb) return {item:b, rarityRaw:a};
+  if(ra && rb){
+    // pick the stronger rarity by rank
+    const rankA = RARITY_RANK[ra] || 0;
+    const rankB = RARITY_RANK[rb] || 0;
+    if(rankA >= rankB) return {item:b, rarityRaw:a};
+    else return {item:a, rarityRaw:b};
+  }
+  // fallback: assume a=item b=rarity
+  return {item:a, rarityRaw:b};
+}
+
 function parseCardText(text){
   const linesIn = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
   const items = [];
-  let i=0;
+  let i = 0;
   while(i < linesIn.length){
     const line = linesIn[i];
     const parts = line.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
+
     if(parts.length >= 2){
-      // process pairs within the line
       for(let j=0;j<parts.length;j+=2){
-        const a = parts[j] || '';
-        const b = parts[j+1] || '';
-        const ra = normalizeRarity(a);
-        const rb = normalizeRarity(b);
-        // if b is a rarity and a is not -> a = item, b = rarity
-        if(rb && !ra){
-          items.push({item:a, rarityRaw:b});
-        }
-        // if a is a rarity and b is not -> b = item, a = rarity
-        else if(ra && !rb){
-          items.push({item:b, rarityRaw:a});
-        }
-        // if both are rarities -> prefer more specific (very common > common), but we still need an item:
-        else if(ra && rb){
-          // pick the stronger rarity for the rarity field
-          const chooseR = (ra === 'very common' || rb === 'common') ? ra : (rb === 'very common' ? rb : ra);
-          // whichever token isn't the chosen rarity becomes the item (if possible)
-          if(chooseR === ra){
-            items.push({item:b, rarityRaw:a});
-          } else {
-            items.push({item:a, rarityRaw:b});
-          }
-        }
-        // neither token is recognized as rarity -> assume a=item b=rarity (fallback)
-        else {
-          items.push({item:a, rarityRaw:b});
-        }
+        const a = parts[j]||'', b = parts[j+1]||'';
+        const resolved = handlePairTokens(a,b);
+        items.push({item:resolved.item, rarityRaw:resolved.rarityRaw});
       }
       i++; continue;
     }
 
-    // single token line — could be item or a rarity line for previous item
     const single = parts[0];
-    const maybeR = normalizeRarity(single);
-    if(maybeR){
+    const maybeRsingle = normalizeRarity(single);
+    if(maybeRsingle){
       if(items.length > 0 && !items[items.length-1].rarityRaw){
         items[items.length-1].rarityRaw = single;
       }
       i++; continue;
     }
 
-    // lookahead: next line might be rarity (one or two tokens)
+    // lookahead for next-line rarity (one or two tokens)
     const next = linesIn[i+1] || '';
     const nextParts = next.split(/\t| {2,}|\s{2,}/).map(p=>p.trim()).filter(Boolean);
     if(nextParts.length > 0){
@@ -220,22 +216,16 @@ function parseCardText(text){
       if(nextParts.length > 1) two = (nextParts[0] + ' ' + nextParts[1]);
       const maybeTwo = two ? normalizeRarity(two) : null;
       const maybeOne = normalizeRarity(nextParts[0]);
-      if(maybeTwo){
-        items.push({item:single, rarityRaw: two});
-        i+=2; continue;
-      }
-      if(maybeOne){
-        items.push({item:single, rarityRaw: nextParts[0]});
-        i+=2; continue;
-      }
+      if(maybeTwo){ items.push({item:single, rarityRaw:two}); i+=2; continue; }
+      if(maybeOne){ items.push({item:single, rarityRaw:nextParts[0]}); i+=2; continue; }
     }
 
-    // fallback: treat current line as item with empty rarity
+    // fallback
     items.push({item:single, rarityRaw:''});
     i++;
   }
 
-  // fallback tokenisation if count not square
+  // fallback tokenization
   if(!Number.isInteger(Math.sqrt(items.length))){
     const tokens = text.split(/\s+/).filter(Boolean);
     const list = [];
@@ -256,20 +246,18 @@ function parseCardText(text){
   return items.map(x=>({item:formatItemName(x.item), rarity:normalizeRarity(x.rarityRaw)||'common'}));
 }
 
-/* ---------- grid build & render (unchanged behaviour otherwise) ---------- */
-
 function buildGridFromPairs(pairs){
   const count = pairs.length;
   const size = Math.sqrt(count);
   if(!Number.isInteger(size) || size < 1 || size > 10) return null;
   N = size; grid = [];
   for(let r=0;r<N;r++){
-    const row = [];
+    const row=[];
     for(let c=0;c<N;c++){
       const p = pairs[r*N + c];
       const rar = (p && p.rarity) ? p.rarity : 'common';
       const meta = RARITIES[rar] || RARITIES['common'];
-      row.push({item:(p&&p.item)?p.item:'', rarityKey:rar, basePts:meta.pts, mark:null});
+      row.push({item:(p && p.item) ? p.item : '', rarityKey:rar, basePts:meta.pts, mark:null});
     }
     grid.push(row);
   }
@@ -278,16 +266,15 @@ function buildGridFromPairs(pairs){
 
 function renderGrid(){
   const container = document.getElementById('gridContainer');
-  container.innerHTML='';
+  container.innerHTML = '';
 
-  // determine grid widths (reverted to robust fixed-per-cell approach)
   const maxTotal = 760;
   const perCellMax = 160;
   const total = Math.min(maxTotal, Math.max(N*80, N*perCellMax));
   const cellSize = Math.floor(total / N);
 
   const root = document.createElement('div');
-  root.style.position = 'relative';
+  root.style.position='relative';
   root.style.width = total + 'px';
   root.style.maxWidth = '100%';
 
@@ -308,10 +295,7 @@ function renderGrid(){
       const rarityEl = document.createElement('div'); rarityEl.className='rarity'; rarityEl.textContent = RARITIES[cell.rarityKey].key;
       const pointsEl = document.createElement('div'); pointsEl.className='points'; pointsEl.textContent = cell.basePts + ' pts';
 
-      cellEl.appendChild(itemEl);
-      cellEl.appendChild(rarityEl);
-      cellEl.appendChild(pointsEl);
-
+      cellEl.appendChild(itemEl); cellEl.appendChild(rarityEl); cellEl.appendChild(pointsEl);
       const mark = document.createElement('div'); mark.className='overlayMark'; cellEl.appendChild(mark);
 
       cellEl.addEventListener('click', ()=>{ cycleMark(r,c); renderEverything(); });
@@ -320,32 +304,16 @@ function renderGrid(){
     }
   }
 
-  const lineLayer = document.createElement('div');
-  lineLayer.className = 'line-layer';
-
-  root.appendChild(gridEl);
-  root.appendChild(lineLayer);
-  container.appendChild(root);
+  const lineLayer = document.createElement('div'); lineLayer.className='line-layer';
+  root.appendChild(gridEl); root.appendChild(lineLayer); container.appendChild(root);
 }
 
-function cycleMark(r,c){
-  const cur = grid[r][c].mark;
-  grid[r][c].mark = cur === null ? 'X' : (cur === 'X' ? 'O' : null);
-}
+function cycleMark(r,c){ const cur = grid[r][c].mark; grid[r][c].mark = cur === null ? 'X' : (cur === 'X' ? 'O' : null); }
 
 function getLinesForTeam(team){
   const res=[];
-  // rows
-  for(let r=0;r<N;r++){
-    let ok=true; for(let c=0;c<N;c++){ if(grid[r][c].mark !== team){ ok=false; break; } }
-    if(ok) res.push({type:'row',i:r});
-  }
-  // cols
-  for(let c=0;c<N;c++){
-    let ok=true; for(let r=0;r<N;r++){ if(grid[r][c].mark !== team){ ok=false; break; } }
-    if(ok) res.push({type:'col',i:c});
-  }
-  // diagonals
+  for(let r=0;r<N;r++){ let ok=true; for(let c=0;c<N;c++){ if(grid[r][c].mark !== team){ ok=false; break; } } if(ok) res.push({type:'row',i:r}); }
+  for(let c=0;c<N;c++){ let ok=true; for(let r=0;r<N;r++){ if(grid[r][c].mark !== team){ ok=false; break; } } if(ok) res.push({type:'col',i:c}); }
   let ok=true; for(let i=0;i<N;i++){ if(grid[i][i].mark !== team){ ok=false; break; } } if(ok) res.push({type:'diag',which:0});
   ok=true; for(let i=0;i<N;i++){ if(grid[i][N-1-i].mark !== team){ ok=false; break; } } if(ok) res.push({type:'diag',which:1});
   return res;
@@ -358,7 +326,6 @@ function renderEverything(){
   const gridEl = root.querySelector('.grid');
   if(!gridEl) return;
 
-  // update X/O overlays
   const cells = gridEl.querySelectorAll('.cell');
   cells.forEach(cellEl=>{
     const r = parseInt(cellEl.dataset.r,10), c = parseInt(cellEl.dataset.c,10);
@@ -371,27 +338,22 @@ function renderEverything(){
     cellEl.classList.remove('glow');
   });
 
-  // compute completed lines
   lines.X = getLinesForTeam('X'); lines.O = getLinesForTeam('O');
 
-  // clear overlay layer fully
   const lineLayer = root.querySelector('.line-layer');
   if(lineLayer) lineLayer.innerHTML='';
 
-  // boolean map if a cell is part of any completed line for that team
   const inLine = {};
   for(let r=0;r<N;r++) for(let c=0;c<N;c++) inLine[`${r},${c}`] = {X:false,O:false};
 
-  // mark inLine and draw overlays (no stacking)
   ['X','O'].forEach(team=>{
     (lines[team]||[]).forEach(ln=>{
-      if(ln.type === 'row'){ const r=ln.i; for(let c=0;c<N;c++) inLine[`${r},${c}`][team]=true; drawRowOverlay(r,team); }
-      else if(ln.type === 'col'){ const c=ln.i; for(let r=0;r<N;r++) inLine[`${r},${c}`][team]=true; drawColOverlay(c,team); }
-      else if(ln.type === 'diag'){ if(ln.which===0){ for(let i=0;i<N;i++) inLine[`${i},${i}`][team]=true; drawDiagOverlay(0,team);} else { for(let i=0;i<N;i++) inLine[`${i},${N-1-i}`][team]=true; drawDiagOverlay(1,team);} }
+      if(ln.type==='row'){ const r=ln.i; for(let c=0;c<N;c++) inLine[`${r},${c}`][team]=true; drawRowOverlay(r,team); }
+      else if(ln.type==='col'){ const c=ln.i; for(let r=0;r<N;r++) inLine[`${r},${c}`][team]=true; drawColOverlay(c,team); }
+      else if(ln.type==='diag'){ if(ln.which===0){ for(let i=0;i<N;i++) inLine[`${i},${i}`][team]=true; drawDiagOverlay(0,team);} else { for(let i=0;i<N;i++) inLine[`${i},${N-1-i}`][team]=true; drawDiagOverlay(1,team);} }
     });
   });
 
-  // apply glow to any marked cell that is doubled
   for(let r=0;r<N;r++){
     for(let c=0;c<N;c++){
       const key = `${r},${c}`;
@@ -402,14 +364,12 @@ function renderEverything(){
     }
   }
 
-  // compute scores — doubling at most once per cell
   let scoreX = 0, scoreO = 0;
   for(let r=0;r<N;r++){
     for(let c=0;c<N;c++){
       const cell = grid[r][c]; const key = `${r},${c}`; const mark = cell.mark;
       if(mark === 'X'){ const multiplier = inLine[key].X ? 2 : 1; scoreX += cell.basePts * multiplier; }
       else if(mark === 'O'){ const multiplier = inLine[key].O ? 2 : 1; scoreO += cell.basePts * multiplier; }
-      // update per-cell displayed pts
       const idx = r*N + c; const cellEl = gridEl.children[idx]; const ptsEl = cellEl.querySelector('.points');
       let effective = cell.basePts;
       if(cell.mark === 'X' && inLine[key].X) effective = cell.basePts * 2;
@@ -421,11 +381,10 @@ function renderEverything(){
   document.getElementById('scoreX').textContent = scoreX;
   document.getElementById('scoreO').textContent = scoreO;
 
-  // store prev lines
   prevLines.X = JSON.parse(JSON.stringify(lines.X)); prevLines.O = JSON.parse(JSON.stringify(lines.O));
 }
 
-// overlay drawing (precise)
+// overlays (same as before)
 function drawRowOverlay(rowIndex, team){
   const container = document.getElementById('gridContainer');
   const root = container.querySelector('div'); if(!root) return;
